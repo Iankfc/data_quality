@@ -489,3 +489,300 @@ Null and zero profile of every column in the model output table `policy_claims_s
 | `total_approved` | 2 zeros (18.2%) | Yes. Both rows have only Under Review claims left after denied claims are removed (BR1), and Under Review claims have `approved_amount` = 0 |
 | `approval_rate_pct` | 2 zeros (18.2%) | Yes. Same 2 rows: 0 approved ÷ amount claimed = 0% |
 | All other columns | No nulls, no zeros | Yes. `claim_count` ≥ 1 for every row (BR5), so `latest_incident_date` and `approval_rate_pct` are never null |
+
+---
+
+## 5. Strategy
+
+This section ranks the 11 columns of the target table `policy_claims_summary` by how important each is compared with the others. Testing effort, and how strictly a failure is treated, follow the ranking: the most important columns get the deepest testing, and a failure in them stops the release.
+
+### 5.1 How importance is scored
+
+Each column is scored from 1 (low) to 3 (high) on three factors. The three scores are added together, giving a total from 3 to 9.
+
+| Factor | Question | 1 | 2 | 3 |
+|---|---|---|---|---|
+| **Business impact** | How much harm does a wrong value do to the decisions made from this table? | Display only | Used in analysis | Drives underwriting, renewal or financial decisions |
+| **Transformation risk** | How likely is the model to get it wrong? | Copied straight from source | Simple calculation or one rule | Several rules, joins or aggregation that can double-count |
+| **Dependency** | How much else in the table depends on it? | Nothing | One other column or rule | Defines the grain, feeds other columns, or decides which rows are kept |
+
+| Total score | Priority |
+|---|---|
+| 8 – 9 | Critical |
+| 6 – 7 | High |
+| 4 – 5 | Medium |
+| 3 | Low |
+
+### 5.2 Column ranking
+
+| Rank | column_name | Business impact | Transformation risk | Dependency | Score | Priority | Why |
+|---|---|---|---|---|---|---|---|
+| 1 | `total_claimed` | 3 | 3 | 3 | **9** | Critical | Main measure of claims exposure. Depends on BR1 (denied excluded), BR2 (total per policy before join) and BR7. Feeds `approval_rate_pct` and sets the sort order (BR10) |
+| 2 | `owner_id` | 3 | 2 | 3 | **8** | Critical | Half of the grain and the join key to policies. A wrong key duplicates, merges or drops rows, which makes every other column wrong |
+| 3 | `policy_type` | 3 | 2 | 3 | **8** | Critical | The other half of the grain. A wrong value moves policies into the wrong group, changing every total on both rows |
+| 4 | `total_approved` | 3 | 3 | 2 | **8** | Critical | The amount actually paid or due to be paid. Same rules and double-counting risk as `total_claimed`. Feeds `approval_rate_pct` |
+| 5 | `claim_count` | 2 | 3 | 3 | **8** | Critical | Decides which rows appear at all (BR5: at least one claim). Depends on BR1 and BR2. An error adds or removes whole rows |
+| 6 | `total_annual_premium` | 3 | 3 | 1 | **7** | High | Revenue side of the claims-to-premium comparison. Most at risk of double-counting: it is only correct because claims are totalled per policy first (BR2). BR6 (claim-free policies still count) also affects it |
+| 7 | `approval_rate_pct` | 3 | 3 | 1 | **7** | High | Key indicator for reviews. Calculated from two other columns, with divide-by-zero handling (BR8) and rounding (BR9). Usually correct if ranks 1 and 4 are correct |
+| 8 | `latest_incident_date` | 2 | 2 | 1 | **5** | Medium | Shows how recent the activity is. Simple `MAX`, but must ignore denied claims (BR1) |
+| 9 | `policy_count` | 1 | 2 | 1 | **4** | Medium | Context for the totals. Simple count, but the case of two policies of the same type for one owner is not in the current data (see 3.2.2) |
+| 10 | `owner_state` | 2 | 1 | 1 | **4** | Medium | Used to slice results by state. Copied straight from `policy_owner.state` |
+| 11 | `owner_name` | 1 | 1 | 1 | **3** | Low | Display only. Simple concatenation of first and last name. Contains personal data, so check where the table is shared rather than the value itself |
+
+### 5.3 Test depth by priority
+
+| Priority | Columns | Tests to run | If a test fails |
+|---|---|---|---|
+| **Critical** | `total_claimed`, `owner_id`, `policy_type`, `total_approved`, `claim_count` | Reconcile every row against totals calculated independently from the source tables. Test each business rule that affects the column (BR1, BR2, BR5) with records built for that purpose, including edge cases: a policy with several claims, a policy with only denied claims, and an owner with two policies of the same type. Check the grain is unique (no duplicate `owner_id` + `policy_type`). Domain, range and null checks (sections 3 and 4) | **Stop the release.** Fix before the table is used |
+| **High** | `total_annual_premium`, `approval_rate_pct` | Reconcile against the source (premium) or recalculate from other columns (rate). Specific test for double-counting: a policy with 3 claims must add its premium once. Range and null checks | **Stop the release.** Fix before the table is used |
+| **Medium** | `latest_incident_date`, `policy_count`, `owner_state` | Range, domain and null checks. Spot-check a sample of rows against the source | Warn. Release can go ahead; fix in the next change |
+| **Low** | `owner_name` | Null check and data profiling only | Warn. Fix when convenient |
+
+### 5.4 Order of testing
+
+1. **Grain first:** check `owner_id` + `policy_type` is unique and that the row count matches what is expected. If the grain is wrong, every other test result is meaningless.
+2. **Row selection:** check `claim_count`, and with it the filters BR1, BR3, BR4 and BR5, so that the right rows are in the table.
+3. **Money columns:** reconcile `total_claimed`, `total_approved` and `total_annual_premium` with the source tables.
+4. **Calculated columns:** check `approval_rate_pct` against the money columns.
+5. **Everything else:** run domain validation and profiling on the remaining Medium and Low columns.
+
+---
+
+## 6. Profiling review questions
+
+Profiling (section 4) gives the numbers; these questions decide whether the numbers make sense. Work through them for each column, starting with the Critical and High columns from section 5. A question with no clear answer should go to the data or business owner before the column is signed off.
+
+### 6.1 General questions (every column)
+
+1. **Meaning:** What does this column represent in the business, and what values would someone who works with it expect to see?
+2. **Source of truth:** Where does the value come from (entered by a person, set by a system, calculated by the model)? Who owns it?
+3. **Data type:** Is the data type right for the meaning? For example, is a ZIP code stored as text so leading zeros are kept, and is a date stored as a date rather than text?
+4. **Row count:** Does the number of rows match what is expected from the source or the previous load?
+5. **Change over time:** Compared with the previous load, did the null count, zero count, distinct count, min, max or median change by more than normal growth would explain?
+
+### 6.2 Nulls (missing values)
+
+1. Is the column **required**? If yes, any null is a defect.
+2. If nulls are allowed, **what does a null mean**: not yet known, not applicable, or lost in loading?
+3. Do the nulls follow a **business rule**? For example, `closed_date` should be null only for claims that are still open.
+4. Are the nulls **concentrated** in one group (one state, one policy type, one load date)? A cluster usually points to a loading problem, not real missing data.
+5. Are there **hidden nulls**: empty strings, spaces, `N/A`, `unknown`, `0` or `1900-01-01` used to mean "missing"?
+
+### 6.3 Zeros
+
+1. Is zero a **valid business value** for this column, or is it impossible (for example, a premium of 0)?
+2. If zero is valid, **which rule explains it**? For example, `dwelling_coverage` = 0 only for HO-4 Renters, and `approved_amount` = 0 only for Denied or Under Review claims.
+3. Do all the zeros **match that rule**? Cross-check the zero rows against the column that explains them.
+4. Is zero being used **in place of null** (the value was unknown, so 0 was stored)?
+5. Is the zero percentage **reasonable**? For example, if 90% of approved amounts were 0, would that match the claims process?
+
+### 6.4 Numeric (quantitative) columns
+
+1. Are **min and max** inside the possible range (credit score 300–850, a year not in the future, amounts not negative)?
+2. Are min and max **believable for the business**, not just possible? For example, is a $5 premium or a $50M claim realistic for this book of business?
+3. Are **mean and median** close? A mean much higher than the median means a few large values are pulling it up. Are those values real, or errors such as an extra zero?
+4. Are there **outliers** far outside p25–p75? Check those rows one by one.
+5. Are the values **suspiciously round or repeated** (for example many values of exactly 1,000), suggesting a default or placeholder?
+6. Is the **precision** right: two decimal places for money, whole numbers for counts?
+7. Do values agree with **related columns**? For example, `approved_amount` ≤ `claim_amount`, and `approval_rate_pct` = `total_approved / total_claimed × 100`.
+
+### 6.5 Categorical columns
+
+1. Is every value in the **expected list** (section 3)? Are any expected values **missing** (for example, no `Active` policies)?
+2. Are there **near-duplicates** that mean the same thing: different case, extra spaces, spelling (`Paid`, `paid`, `PAID `)?
+3. Does the **split between values** make sense? For example, would the business expect a third of all policies to be Cancelled?
+4. Does any value appear **only once or twice**? Rare values are often typos.
+5. Does a **target** column contain only values that exist in its source column?
+
+### 6.6 Date columns
+
+1. Are the dates within a **sensible window**: not in the future when they shouldn't be, and not unreasonably old?
+2. Are dates in the **right order** with related dates (`start_date` < `end_date`, `incident_date` ≤ `reported_date` ≤ `closed_date`)?
+3. Do dates fall inside related **periods**? For example, a claim's `incident_date` should be between its policy's `start_date` and `end_date`.
+4. Are there **default dates** such as `1900-01-01` or `9999-12-31` standing in for missing values?
+5. Are there gaps or spikes in the **distribution over time** (for example no claims for a whole month)?
+
+### 6.7 Identifier and key columns
+
+1. Is the key **unique** where it should be (the primary key of a source table, or the grain of the target)?
+2. Is the key **never null**?
+3. Does every foreign key **find a match** in its parent table (every `policy_id` in claims exists in coverage)?
+4. Do the IDs follow the **expected format** (OWN####, POL####, CLM#####)?
+5. Is the number of **distinct keys** in the target what the source predicts after the filters are applied?
+
+### 6.8 Target table: questions to ask per column
+
+The questions most important for each target column, with the answer from the current data (as of 2026-11-18).
+
+| column_name | Key question | Current answer | Makes sense? |
+|---|---|---|---|
+| `owner_id` | Is `owner_id` + `policy_type` unique, and does every `owner_id` exist in `policy_owner`? | 11 rows, 11 unique combinations; all owners found | Yes |
+| `owner_name` | Is it always "first last" from the source, with no extra spaces or nulls? | No nulls | Yes. Spot-check format |
+| `owner_state` | Are all values in the source `state` list? Why is any source state missing? | 6 of 7 source states; `OR` is missing because of the filters (see 3.2.1) | Yes |
+| `policy_type` | Are all values in the source list? Is every type present? | All 5 types present | Yes |
+| `policy_count` | Is it ever greater than 1? If not, has the multi-policy case been tested? | Always 1 | Valid, but the multi-policy case is **not tested** |
+| `total_annual_premium` | Does it equal the sum of source premiums for the row's policies, counted once each? | Min 199.25, max 3,808.81, no zeros | Yes, if the reconciliation in 5.3 passes |
+| `claim_count` | Is it always ≥ 1? Does it match a count of non-denied source claims? | Min 1, max 2 | Yes |
+| `total_claimed` | Is it always > 0? Is the largest value (98,955.95) a real total of real claims? | No zeros; largest row is OWN1005 with 2 claims | Yes. Confirm the largest rows against the source |
+| `total_approved` | Are the zeros explained? Is it ever more than `total_claimed`? | 2 zeros, both rows with only Under Review claims; never above `total_claimed` | Yes |
+| `latest_incident_date` | Is it ever null, or later than today? Does it ignore denied claims? | No nulls; latest is 2026-04-10 | Yes |
+| `approval_rate_pct` | Is it always 0–100? Are the 0% rows the same as the zero `total_approved` rows? | 0 – 88.5; the 2 zeros match | Yes |
+
+---
+
+## 7. QA test scenarios
+
+QA test scenarios for each column of the target table `policy_claims_summary`. They check that the model logic is correct (see the business rules BR1–BR10 in section 1), not the quality of incoming data (sections 3 and 4). Columns are listed in the priority order from section 5. A scenario is included only when it applies to the column.
+
+**Test data column:**
+- **Existing:** the case is already in the source CSVs. The record named is the one to check.
+- **New:** the case is not in the current data (see 2.5 and 6.8). Build the records in a separate test copy of the source files, never in `source/`, then run the model against that copy.
+
+**Pass / fail:** a failed Critical or High scenario stops the release; a failed Medium or Low scenario is a warning (section 5.3).
+
+**Importance column:** how much the scenario matters for deciding whether the column's content and format make sense. This is separate from the column priority in section 5: a Critical column can still have a Low-importance format check.
+- **High:** if this fails, the values are wrong or misleading. Totals are off, rows are in the table that should not be (or are missing), or the row contradicts itself. Decisions made from the table would be wrong.
+- **Medium:** if this fails, values are wrong only in an edge case or for a small group of rows, or the problem is easy to spot. The content is doubtful but not misleading overall.
+- **Low:** if this fails, the meaning of the data is still right, but the format or presentation is off (rounding, spacing, sort order, data type).
+- **Why it matters** explains what would go wrong in the data if the scenario failed.
+
+### 7.1 `total_claimed` (Critical)
+
+| ID | Scenario | Importance | Why it matters | Rule | Test data | Input / steps | Expected result |
+|---|---|---|---|---|---|---|---|
+| TC-01 | Total matches the source for every row | **High** | Main check that the claims exposure figure is true. If it fails, the headline number for every owner is wrong and any underwriting or renewal decision based on it is misleading. | BR1, BR2 | Existing: all 11 rows | Sum `claim_amount` of non-denied claims on non-cancelled policies per `owner_id` + `policy_type`, calculated directly from the source | Equal for every row, to 2 decimals |
+| TC-02 | Denied claim amount is left out | **High** | Makes sure the amount shows only claims that can still be paid. Without it, rejected claims inflate exposure; `OWN1014` would look three times riskier than it is. | BR1 | Existing: `OWN1014` HO-6 Condo (`POL5014`: Under Review 12,310.57 + Denied 26,464.59) | Run model | `total_claimed` = 12,310.57, not 38,775.16 |
+| TC-03 | Claims from several policies of the same type are added together | **High** | Makes sure the total is complete when an owner has several policies of the same type. A failure silently drops or double-counts claims, and current data has no such owner to reveal it. | BR2 | New: one owner, two HO-3 policies; policy A has claims of 1,000 and 2,000, policy B has a claim of 500 | Run model | One row, `total_claimed` = 3,500.00 |
+| TC-04 | Claims on a cancelled policy are left out | **Medium** | Claims on cancelled policies are not current business. Including them overstates exposure, but only for owners with a cancelled and a live policy of the same type. | BR3 | New: one owner, two HO-3 policies; policy A Renewed with a 1,000 claim, policy B Cancelled with a 5,000 claim | Run model | `total_claimed` = 1,000.00 |
+| TC-05 | Result is rounded to 2 decimals | **Low** | Format check: money should read as a clean 2-decimal amount. Rounding noise does not change the meaning but looks wrong in reports and breaks exact comparisons. | BR9 | New: two claims of 0.10 and 0.20 on one policy | Run model | `total_claimed` = 0.30 exactly (not 0.30000000000000004) |
+| TC-06 | Value is always above 0 | **Medium** | Quick sense check: every row exists because it has claims, so a total of 0 or less means amounts were lost or a row was kept that should not be. | BR5 | Existing: all rows | Check min | Min > 0 (current min 3,772.93) |
+| TC-07 | Rows are sorted by `total_claimed`, highest first | **Low** | Presentation: readers expect the largest exposure first. A wrong order does not change any value. | BR10 | Existing: all rows | Compare each row with the next | Every row ≥ the row after it; first row `OWN1005` DP-3 Dwelling (98,955.95) |
+
+### 7.2 `owner_id` (Critical)
+
+| ID | Scenario | Importance | Why it matters | Rule | Test data | Input / steps | Expected result |
+|---|---|---|---|---|---|---|---|
+| OID-01 | `owner_id` + `policy_type` is unique | **High** | Protects the grain. A duplicate row doubles every total when the table is summed, and users cannot tell which row is right. | Grain | Existing: all rows | Count rows vs distinct `owner_id` + `policy_type` | Equal (current: 11 = 11) |
+| OID-02 | Every `owner_id` exists in `policy_owner` | **High** | A row for an owner who is not in the owner table describes a customer who does not exist, so its content cannot be trusted or traced. | Join | Existing: all rows | Look up each `owner_id` in the source | All found |
+| OID-03 | `owner_id` is never null and keeps the source format | **Medium** | Null or badly formatted IDs cannot be matched to other systems. The format check also catches IDs being cut short or read as numbers. | Join | Existing: all rows | Check nulls and format `OWN` + 4 digits | No nulls; all match the format |
+| OID-04 | Owner with policies of two types appears on two rows | **High** | Keeps an owner's different policy types apart. Merged rows would mix, for example, renters and dwelling figures into a total that means nothing. | Grain | Existing: `OWN1005` (HO-3 and DP-3, both with claims) | Run model | Two rows for `OWN1005`, one per type |
+| OID-05 | Owner whose only policy is Cancelled is left out | **High** | Cancelled business must not appear as current claims experience. `OWN1015` has 4 claims that would wrongly mark them as high-risk. | BR3 | Existing: `OWN1015` (`POL5015` Cancelled, with 4 claims) | Run model | `OWN1015` not in output |
+| OID-06 | Owner with a credit score below 600 is left out | **High** | Low-score owners are outside this view. Including them changes which customers the totals describe, and the current data cannot show the filter working. | BR4 | New: owner with `credit_score` = 599, a Renewed policy and a Paid claim | Run model | Owner not in output |
+| OID-07 | Owner with a credit score of exactly 600 is kept | **Medium** | Boundary check: using `>` instead of `>=` would silently drop valid owners with a score of exactly 600. | BR4 (boundary) | Existing: `OWN1007` (`credit_score` = 600) | Run model | `OWN1007` in output |
+| OID-08 | Owner with a null credit score is left out | **Medium** | Owners with no score are dropped without warning. They may be real customers, so the business needs to confirm this is intended. | BR4 | New: owner with `credit_score` null, Renewed policy, Paid claim | Run model | Owner not in output (a null score fails `>= 600`). Confirm with the business that this is intended |
+| OID-09 | Owner with no policies is left out | **Low** | Owners without policies cannot have claims. This mainly confirms the join does not create empty rows. | Join (INNER) | New: owner in `policy_owner` with no rows in `policy_coverage` | Run model | Owner not in output |
+| OID-10 | Policy whose `owner_id` is not in `policy_owner` is left out | **Medium** | Confirms the model does not invent rows for unknown customers. It also shows that such claims are silently dropped, which should be reported as a source data problem. | Join (INNER) | New: policy with `owner_id` = `OWN9999` (not in owners) and a Paid claim | Run model | No row for `OWN9999`; no error |
+
+### 7.3 `policy_type` (Critical)
+
+| ID | Scenario | Importance | Why it matters | Rule | Test data | Input / steps | Expected result |
+|---|---|---|---|---|---|---|---|
+| PT-01 | Values are passed through from the source unchanged | **Medium** | Values must match the source exactly. A changed spelling or case splits one type into two groups in every report. | Pass-through | Existing: all rows | Compare each row's `policy_type` with its policies in `policy_coverage` | Exact match, including case and spacing |
+| PT-02 | Values are in the source domain | **Medium** | A type outside the source list is not a real product, and reports grouped by type would show a stray category. | Domain (3.2.1) | Existing: all rows | Check against `policy_coverage.policy_type` values | All 5 values valid; none outside the list |
+| PT-03 | Two policies of the same type for one owner become one row | **High** | Core grain rule that the current data never tests. Two rows for one owner and type would break the grain and split that owner's totals. | Grain | New: one owner, two HO-3 policies, each with a Paid claim | Run model | One row for that owner + HO-3 |
+| PT-04 | A type whose policies are all filtered out produces no row | **High** | Only types with live, non-denied claims should appear. A row for a cancelled or claim-free type shows claims experience that does not exist. | BR3, BR5 | Existing: `OWN1009` DP-3 (Cancelled), `OWN1006` DP-3 (Cancelled), `OWN1020` HO-4 (Renewed, no claims) | Run model | No DP-3 row for `OWN1009` or `OWN1006`; no HO-4 row for `OWN1020`; their other types still appear |
+| PT-05 | `policy_type` is never null | **Medium** | A row with no policy type has no meaning in a table grouped by type. | Grain | Existing: all rows | Check nulls | No nulls |
+
+### 7.4 `total_approved` (Critical)
+
+| ID | Scenario | Importance | Why it matters | Rule | Test data | Input / steps | Expected result |
+|---|---|---|---|---|---|---|---|
+| TA-01 | Total matches the source for every row | **High** | Main check that the approved amount is true. This is money paid or owed, so an error misstates losses. | BR1, BR2 | Existing: all 11 rows | Sum `approved_amount` of non-denied claims on non-cancelled policies per group | Equal for every row, to 2 decimals |
+| TA-02 | Denied claim is left out even when it has an approved amount | **Medium** | Guards against a source problem the current data does not have. If it happens, the total would include money that was never approved. | BR1 | New: Denied claim with `approved_amount` = 1,000 (a source anomaly) next to a Paid claim with `approved_amount` = 500 | Run model | `total_approved` = 500.00. Current data cannot test this: every Denied claim has `approved_amount` = 0 |
+| TA-03 | Group with only Under Review claims gives 0 | **High** | Nothing approved must show as 0, not blank. A blank reads as "unknown" and breaks sums and the approval rate. | BR1, BR7 | Existing: `OWN1001` DP-3 (one Under Review claim) | Run model | `total_approved` = 0.00, not null |
+| TA-04 | Approved amounts from several same-type policies are added together | **High** | Makes sure approved amounts are complete when an owner has several policies of the same type. | BR2 | New: one owner, two HO-3 policies with approved amounts 1,000 and 250 | Run model | `total_approved` = 1,250.00 |
+| TA-05 | Never more than `total_claimed` | **High** | Approving more than was claimed is impossible. If it appears, the content makes no sense and usually points to double-counting. | Range (3.2.2) | Existing: all rows | Compare the two columns | `total_approved` ≤ `total_claimed` on every row |
+| TA-06 | Result is rounded to 2 decimals | **Low** | Format check: amounts read as clean 2-decimal values. | BR9 | Existing: `OWN1003` HO-3 (raw sum 27,663.620000000003) | Run model | 27,663.62 |
+
+### 7.5 `claim_count` (Critical)
+
+| ID | Scenario | Importance | Why it matters | Rule | Test data | Input / steps | Expected result |
+|---|---|---|---|---|---|---|---|
+| CC-01 | Count matches the source for every row | **High** | Main check that claim activity is counted correctly. The count decides which rows exist, so an error adds or removes whole rows. | BR1, BR2 | Existing: all 11 rows | Count non-denied claims on non-cancelled policies per group | Equal for every row |
+| CC-02 | Denied claims are not counted | **High** | Rejected claims must not count as activity. Counting them makes owners look riskier than they are. | BR1 | Existing: `OWN1014` HO-6 (1 Under Review + 1 Denied) | Run model | `claim_count` = 1 |
+| CC-03 | All non-denied statuses are counted | **High** | Every live status (Under Review, Approved, Paid, Closed) must be counted. Missing one hides open or settled exposure. | BR1 | Existing: `OWN1020` DP-3 (`POL5020`: Paid + Approved), `OWN1007` HO-4 (`POL5007`: Under Review + Closed) | Run model | `claim_count` = 2 for both |
+| CC-04 | Group where every claim is Denied is left out | **High** | An owner whose only claims were rejected has no claims experience. A row for them would show a claim count of 0, which makes no sense in this table. | BR1, BR5 | Existing: `OWN1013` (`POL5013` Renewed, one Denied claim) | Run model | `OWN1013` not in output |
+| CC-05 | Group with no claims at all is left out | **High** | Rows without claims do not belong in a claims experience view. A row with 0 claims means the filter failed. | BR5 | Existing: `OWN1002` (`POL5002` Expired, no claims) | Run model | `OWN1002` not in output |
+| CC-06 | Claims from several same-type policies are added together | **High** | Makes sure the count is complete across several policies of the same type. | BR2 | New: one owner, two HO-3 policies with 2 and 1 non-denied claims | Run model | `claim_count` = 3 |
+| CC-07 | Claims on a cancelled policy are not counted | **Medium** | Claims on cancelled policies are not current activity. Only affects owners with both a cancelled and a live policy of the same type. | BR3 | New: one owner, two HO-3 policies; Renewed with 1 claim, Cancelled with 2 claims | Run model | `claim_count` = 1 |
+| CC-08 | Value is always 1 or more | **Medium** | Quick sense check: a count of 0 means the row should not exist. | BR5 | Existing: all rows | Check min | Min = 1 |
+
+### 7.6 `total_annual_premium` (High)
+
+| ID | Scenario | Importance | Why it matters | Rule | Test data | Input / steps | Expected result |
+|---|---|---|---|---|---|---|---|
+| TAP-01 | Premium of a policy with several claims is counted once | **High** | Catches the most likely bug in this model: premium repeated once per claim. A doubled premium makes claims look half as costly relative to premium. | BR2 | Existing: `OWN1005` DP-3 (`POL5021`, premium 1,370.23, 2 claims) | Run model | `total_annual_premium` = 1,370.23, not 2,740.46 |
+| TAP-02 | Premium is counted once with 3 or more claims | **High** | Same as TAP-01 with 3 or more claims, which catches a fix that only works for 2 claims. The current data has at most 2 claims per policy. | BR2 | New: one policy, premium 1,000, with 3 Paid claims | Run model | `total_annual_premium` = 1,000.00, not 3,000.00 |
+| TAP-03 | Same-type policy with no claims still adds its premium | **High** | Premium from a claim-free policy is real income. Leaving it out understates premium and makes the owner look riskier. | BR6 | New: one owner, two HO-3 policies; A (premium 1,000) has a Paid claim, B (premium 800) has no claims | Run model | `total_annual_premium` = 1,800.00 |
+| TAP-04 | Same-type policy with only Denied claims still adds its premium | **Medium** | Combines two rules (rejected claims left out, premium kept). Makes sure removing a policy's only claim does not also remove its premium. | BR1, BR6 | New: as TAP-03, but policy B has one Denied claim | Run model | `total_annual_premium` = 1,800.00; B's claim not in `claim_count` |
+| TAP-05 | Premium of a cancelled policy is left out | **Medium** | Premium from a cancelled policy is not current income. Including it overstates premium for owners with mixed policies. | BR3 | New: one owner, two HO-3 policies; Renewed (premium 1,000) with a claim, Cancelled (premium 700) | Run model | `total_annual_premium` = 1,000.00 |
+| TAP-06 | Result is rounded to 2 decimals | **Low** | Format check: amounts read as clean 2-decimal values. | BR9 | New: two same-type policies with premiums 1,000.10 and 1,000.20 | Run model | 2,000.30 exactly |
+| TAP-07 | Total matches the source for every row | **High** | Main check that the premium figure is true for every row. | BR2, BR3 | Existing: all 11 rows | Sum `annual_premium` of non-cancelled policies per group, each policy once | Equal for every row |
+
+### 7.7 `approval_rate_pct` (High)
+
+| ID | Scenario | Importance | Why it matters | Rule | Test data | Input / steps | Expected result |
+|---|---|---|---|---|---|---|---|
+| AR-01 | Rate matches the formula for every row | **High** | The rate must agree with the two totals next to it. If not, the row contradicts itself and readers cannot trust any of it. | BR8, BR9 | Existing: all 11 rows | Recalculate `ROUND(total_approved / total_claimed × 100, 1)` from the unrounded source sums | Equal for every row |
+| AR-02 | Nothing approved gives 0% | **Medium** | Lower limit: nothing approved must show 0.0, not blank. | BR8 | Existing: `OWN1001` DP-3, `OWN1014` HO-6 | Run model | `approval_rate_pct` = 0.0 for both |
+| AR-03 | Everything approved gives 100% | **Medium** | Upper limit: fully approved must show exactly 100.0. A value above 100 would make no sense. | BR8 | New: one Paid claim with `claim_amount` = `approved_amount` = 2,000 | Run model | `approval_rate_pct` = 100.0. Not in current data (max is 88.5) |
+| AR-04 | Nothing claimed gives null, not an error | **Medium** | Makes sure the model does not crash when nothing was claimed, and that the result is blank ("not applicable") rather than a misleading 0. | BR8 | New: one non-denied claim with `claim_amount` = 0 (a source anomaly) | Run model | Model runs without error; `approval_rate_pct` is null |
+| AR-05 | Rounded to 1 decimal | **Low** | Format check: rates read with 1 decimal. | BR9 | New: claimed 3,000, approved 1,000 (33.333…%) | Run model | 33.3 |
+| AR-06 | Denied claims do not affect the rate | **High** | The rate must use the same claims as `total_claimed`. If rejected claims slip into the calculation, the rate disagrees with the totals shown. | BR1 | Existing: `OWN1014` HO-6 | Run model | Rate uses only the Under Review claim: 0 / 12,310.57 = 0.0, not 0 / 38,775.16 |
+
+### 7.8 `latest_incident_date` (Medium)
+
+| ID | Scenario | Importance | Why it matters | Rule | Test data | Input / steps | Expected result |
+|---|---|---|---|---|---|---|---|
+| LID-01 | Date matches the source for every row | **Medium** | Main check that the date shows the owner's most recent real activity. | BR1, BR2 | Existing: all 11 rows | Latest `incident_date` of non-denied claims on non-cancelled policies per group | Equal for every row |
+| LID-02 | A later Denied claim is ignored | **Medium** | A rejected claim must not make activity look more recent than it is. The current data cannot show this rule working. | BR1 | New: Paid claim on 2025-03-01 and Denied claim on 2025-09-01 on the same policy | Run model | 2025-03-01. Current data cannot test this: `OWN1014`'s Denied claim (2026-01-28) is earlier than its Under Review claim (2026-04-10) |
+| LID-03 | Latest date is taken across several same-type policies | **Medium** | Makes sure the most recent date is found across several policies of the same type. | BR2 | New: one owner, two HO-3 policies with claims on 2024-05-01 and 2025-02-01 | Run model | 2025-02-01 |
+| LID-04 | Never null, never in the future | **Medium** | Sense check: a row with claims must have an incident date, and a date after today is impossible. | BR5 | Existing: all rows | Check nulls and max against the run date | No nulls; max 2026-04-10 ≤ run date |
+| LID-05 | Type is DATE | **Low** | Format check: a date stored as text sorts and compares wrongly (for example `2026-4-10` before `2026-04-09`). | Output columns | Existing: model output | Check the column type | DATE |
+
+### 7.9 `policy_count` (Medium)
+
+| ID | Scenario | Importance | Why it matters | Rule | Test data | Input / steps | Expected result |
+|---|---|---|---|---|---|---|---|
+| PC-01 | Count matches the source for every row | **Medium** | Main check that the number of policies behind each row is right. | BR3 | Existing: all 11 rows | Count non-cancelled policies per group | Equal for every row (currently all 1) |
+| PC-02 | A policy with several claims is counted once | **High** | If the count goes up with the number of claims, the premium is being double-counted too (see TAP-01). A quick visible symptom of the most likely bug. | BR2 | Existing: `OWN1005` DP-3 (`POL5021`, 2 claims) | Run model | `policy_count` = 1, not 2 |
+| PC-03 | Two same-type policies, both with claims | **Medium** | Shows the combining of same-type policies working. The current data never has a count above 1. | Grain | New: one owner, two HO-3 policies, each with a Paid claim | Run model | `policy_count` = 2 |
+| PC-04 | Same-type policy with no claims is still counted | **Medium** | A claim-free policy is still a policy. Leaving it out understates the count and the premium. | BR6 | New: as PC-03, but the second policy has no claims | Run model | `policy_count` = 2 |
+| PC-05 | Cancelled policy of the same type is not counted | **Medium** | Cancelled policies must not be counted as current business. | BR3 | New: one owner, two HO-3 policies; one Renewed with a claim, one Cancelled | Run model | `policy_count` = 1 |
+| PC-06 | An Active policy is counted | **High** | Active policies are the current book of business. A mistake in the status filter would drop them all, and the current data has none to reveal it. | BR3 | New: owner with an Active HO-5 policy and a Paid claim | Run model | Row present, `policy_count` = 1. Not in current data (no Active policies) |
+
+### 7.10 `owner_state` (Medium)
+
+| ID | Scenario | Importance | Why it matters | Rule | Test data | Input / steps | Expected result |
+|---|---|---|---|---|---|---|---|
+| OS-01 | Value comes from the owner's mailing state | **Medium** | A wrong state puts the owner in the wrong group for state-level analysis. | Pass-through | Existing: all rows | Compare with `policy_owner.state` for the same `owner_id` | Exact match on every row |
+| OS-02 | Mailing state is used, not the property state | **Medium** | Two state columns exist with different meanings. Using the property state changes what the column describes, and the current data cannot tell them apart. | Pass-through | New: owner with `state` = TX and a policy with `property_state` = FL, with a Paid claim | Run model | `owner_state` = TX. Current data cannot test this: property state always equals mailing state |
+| OS-03 | Values are in the source domain | **Low** | A state outside the source list suggests the value was changed or corrupted along the way. | Domain (3.2.1) | Existing: all rows | Check against `policy_owner.state` values | All valid. `OR` is missing because of the filters (3.2.1) |
+| OS-04 | Never null | **Low** | A row without a state drops out of any state-level analysis. | Pass-through | Existing: all rows | Check nulls | No nulls |
+
+### 7.11 `owner_name` (Low)
+
+| ID | Scenario | Importance | Why it matters | Rule | Test data | Input / steps | Expected result |
+|---|---|---|---|---|---|---|---|
+| ON-01 | Name is first name, one space, last name | **Low** | The name must match the customer record so people can recognise the owner. It does not affect any number. | Output columns | Existing: all rows | Compare with `first_name || ' ' || last_name` from the source | Exact match on every row |
+| ON-02 | Missing first or last name | **Low** | A blank name makes the row hard to recognise. The business needs to decide whether the first name alone is acceptable. | Output columns | New: owner with `last_name` empty, Renewed policy, Paid claim | Run model | `owner_name` is null (in DuckDB, joining text with a null gives null). Confirm with the business whether the first name alone should be shown instead |
+| ON-03 | No extra spaces | **Low** | Format check: extra spaces look wrong and break exact matching on names. | Output columns | Existing: all rows | Check for leading, trailing or double spaces | None found |
+
+### 7.12 Summary
+
+| Column | Priority | Scenarios | Existing data | New data needed | High importance | Medium importance | Low importance |
+|---|---|---|---|---|---|---|---|
+| `total_claimed` | Critical | 7 | 4 | 3 | 3 | 2 | 2 |
+| `owner_id` | Critical | 10 | 6 | 4 | 5 | 4 | 1 |
+| `policy_type` | Critical | 5 | 4 | 1 | 2 | 3 | 0 |
+| `total_approved` | Critical | 6 | 4 | 2 | 4 | 1 | 1 |
+| `claim_count` | Critical | 8 | 6 | 2 | 6 | 2 | 0 |
+| `total_annual_premium` | High | 7 | 2 | 5 | 4 | 2 | 1 |
+| `approval_rate_pct` | High | 6 | 3 | 3 | 2 | 3 | 1 |
+| `latest_incident_date` | Medium | 5 | 3 | 2 | 0 | 4 | 1 |
+| `policy_count` | Medium | 6 | 2 | 4 | 2 | 4 | 0 |
+| `owner_state` | Medium | 4 | 3 | 1 | 0 | 2 | 2 |
+| `owner_name` | Low | 3 | 2 | 1 | 0 | 0 | 3 |
+| **Total** | | **67** | **39** | **28** | **28** | **27** | **12** |
+
+Several new-data scenarios use the same setup: **one owner with two policies of the same type**. TC-03, TC-04, TA-04, CC-06, CC-07, TAP-03 to TAP-06, LID-03 and PC-03 to PC-05 can share one small test file with a few owners built this way.
