@@ -1,0 +1,196 @@
+{
+  "table_name": "policy_coverage",
+  "source_file": "source/policy_coverage.csv",
+  "format": "csv",
+  "description": "Housing insurance policies and their coverage limits, deductible, add-ons and premium. One row per policy term.",
+  "grain": "One row per policy term",
+  "row_count": 25,
+  "contains_pii": false,
+  "primary_key": [
+    "policy_id"
+  ],
+  "foreign_keys": [
+    {
+      "column": "owner_id",
+      "references": "policy_owner.owner_id"
+    }
+  ],
+  "columns": [
+    {
+      "name": "policy_id",
+      "data_type": "VARCHAR",
+      "description": "Unique identifier of the policy (format POL####). Primary key; referenced by policy_claims.policy_id.",
+      "nullable": false,
+      "example": "POL5001",
+      "is_primary_key": true
+    },
+    {
+      "name": "owner_id",
+      "data_type": "VARCHAR",
+      "description": "Owner of the policy. Foreign key to policy_owner.owner_id. One owner can hold several policies.",
+      "nullable": false,
+      "example": "OWN1001",
+      "foreign_key": "policy_owner.owner_id"
+    },
+    {
+      "name": "policy_type",
+      "data_type": "VARCHAR",
+      "description": "Standard homeowners form: HO-3 Standard (open-peril dwelling), HO-5 Premium (open-peril dwelling and contents), HO-6 Condo, HO-4 Renters (contents only, no dwelling), DP-3 Dwelling (landlord / non-owner-occupied).",
+      "nullable": false,
+      "example": "DP-3 Dwelling",
+      "domain_values": [
+        "DP-3 Dwelling",
+        "HO-3 Standard",
+        "HO-4 Renters",
+        "HO-5 Premium",
+        "HO-6 Condo"
+      ]
+    },
+    {
+      "name": "property_address",
+      "data_type": "VARCHAR",
+      "description": "Street address of the insured property. Usually the owner's address, but can be a second property.",
+      "nullable": false,
+      "example": "4112 Cedar Ln"
+    },
+    {
+      "name": "property_city",
+      "data_type": "VARCHAR",
+      "description": "City of the insured property.",
+      "nullable": false,
+      "example": "Denver"
+    },
+    {
+      "name": "property_state",
+      "data_type": "VARCHAR",
+      "description": "Two-letter US state code of the insured property. Drives state-specific rating and regulation.",
+      "nullable": false,
+      "example": "CO",
+      "domain_values": [
+        "CO",
+        "FL",
+        "NC",
+        "OH",
+        "OR",
+        "TN",
+        "TX"
+      ]
+    },
+    {
+      "name": "year_built",
+      "data_type": "BIGINT",
+      "description": "Year the insured dwelling was constructed. Older homes typically carry higher risk.",
+      "nullable": false,
+      "example": "1989"
+    },
+    {
+      "name": "construction_type",
+      "data_type": "VARCHAR",
+      "description": "Primary construction material of the dwelling (Wood Frame, Brick, Masonry, Concrete, Steel Frame). Affects fire and wind risk.",
+      "nullable": false,
+      "example": "Concrete",
+      "domain_values": [
+        "Brick",
+        "Concrete",
+        "Masonry",
+        "Steel Frame",
+        "Wood Frame"
+      ]
+    },
+    {
+      "name": "dwelling_coverage",
+      "data_type": "BIGINT",
+      "description": "Coverage A limit in USD: maximum payout to repair or rebuild the structure. 0 for HO-4 Renters policies.",
+      "nullable": false,
+      "example": "740000"
+    },
+    {
+      "name": "personal_property_coverage",
+      "data_type": "BIGINT",
+      "description": "Coverage C limit in USD: maximum payout for belongings and contents.",
+      "nullable": false,
+      "example": "95000"
+    },
+    {
+      "name": "liability_coverage",
+      "data_type": "BIGINT",
+      "description": "Coverage E limit in USD: maximum payout for third-party bodily injury or property damage the owner is liable for.",
+      "nullable": false,
+      "example": "500000",
+      "domain_values": [
+        100000,
+        300000,
+        500000
+      ]
+    },
+    {
+      "name": "deductible",
+      "data_type": "BIGINT",
+      "description": "Amount in USD the owner pays per claim before insurance pays. Higher deductible lowers the premium.",
+      "nullable": false,
+      "example": "5000",
+      "domain_values": [
+        500,
+        1000,
+        1500,
+        2500,
+        5000
+      ]
+    },
+    {
+      "name": "flood_coverage",
+      "data_type": "VARCHAR",
+      "description": "Whether the optional flood endorsement is included (Y/N). Flood is excluded from standard policies.",
+      "nullable": false,
+      "example": "N",
+      "domain_values": [
+        "N",
+        "Y"
+      ]
+    },
+    {
+      "name": "earthquake_coverage",
+      "data_type": "VARCHAR",
+      "description": "Whether the optional earthquake endorsement is included (Y/N).",
+      "nullable": false,
+      "example": "N",
+      "domain_values": [
+        "N",
+        "Y"
+      ]
+    },
+    {
+      "name": "annual_premium",
+      "data_type": "DOUBLE",
+      "description": "Total yearly premium charged for the policy in USD.",
+      "nullable": false,
+      "example": "2373.82"
+    },
+    {
+      "name": "start_date",
+      "data_type": "DATE",
+      "description": "Effective date when coverage begins (YYYY-MM-DD).",
+      "nullable": false,
+      "example": "2025-05-27"
+    },
+    {
+      "name": "end_date",
+      "data_type": "DATE",
+      "description": "Expiration date when coverage ends (YYYY-MM-DD). Policies are 12-month terms.",
+      "nullable": false,
+      "example": "2026-05-27"
+    },
+    {
+      "name": "status",
+      "data_type": "VARCHAR",
+      "description": "Current policy state: Active (in force), Renewed (term ended and was renewed), Expired (ended without renewal), Cancelled (terminated before end_date).",
+      "nullable": false,
+      "example": "Renewed",
+      "domain_values": [
+        "Cancelled",
+        "Expired",
+        "Renewed"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,115 @@
+{
+  "table_name": "policy_claims",
+  "source_file": "source/policy_claims.csv",
+  "format": "csv",
+  "description": "Claims filed against housing insurance policies. One row per claim.",
+  "grain": "One row per claim",
+  "row_count": 35,
+  "contains_pii": false,
+  "primary_key": [
+    "claim_id"
+  ],
+  "foreign_keys": [
+    {
+      "column": "policy_id",
+      "references": "policy_coverage.policy_id"
+    }
+  ],
+  "columns": [
+    {
+      "name": "claim_id",
+      "data_type": "VARCHAR",
+      "description": "Unique identifier of the claim (format CLM#####). Primary key.",
+      "nullable": false,
+      "example": "CLM90001",
+      "is_primary_key": true
+    },
+    {
+      "name": "policy_id",
+      "data_type": "VARCHAR",
+      "description": "Policy the claim was filed under. Foreign key to policy_coverage.policy_id.",
+      "nullable": false,
+      "example": "POL5007",
+      "foreign_key": "policy_coverage.policy_id"
+    },
+    {
+      "name": "claim_type",
+      "data_type": "VARCHAR",
+      "description": "Cause of loss (peril): Water Damage, Fire, Theft, Wind/Hail, Liability, Vandalism, Flood, Mold.",
+      "nullable": false,
+      "example": "Fire",
+      "domain_values": [
+        "Fire",
+        "Flood",
+        "Liability",
+        "Mold",
+        "Theft",
+        "Vandalism",
+        "Water Damage",
+        "Wind/Hail"
+      ]
+    },
+    {
+      "name": "incident_date",
+      "data_type": "DATE",
+      "description": "Date the loss occurred (YYYY-MM-DD). Should fall between the policy's start_date and end_date.",
+      "nullable": false,
+      "example": "2022-07-15"
+    },
+    {
+      "name": "reported_date",
+      "data_type": "DATE",
+      "description": "Date the claim was reported to the insurer (YYYY-MM-DD). Should be on or after incident_date.",
+      "nullable": false,
+      "example": "2022-07-15"
+    },
+    {
+      "name": "claim_amount",
+      "data_type": "DOUBLE",
+      "description": "Amount in USD requested by the owner for the loss.",
+      "nullable": false,
+      "example": "3535.85"
+    },
+    {
+      "name": "approved_amount",
+      "data_type": "DOUBLE",
+      "description": "Amount in USD approved for payment after adjustment and deductible. 0 when the claim is Denied or Under Review.",
+      "nullable": false,
+      "example": "0.0"
+    },
+    {
+      "name": "claim_status",
+      "data_type": "VARCHAR",
+      "description": "Claim workflow state: Under Review (being assessed), Approved (accepted, payment pending), Paid (payment issued), Denied (rejected), Closed (finalised).",
+      "nullable": false,
+      "example": "Under Review",
+      "domain_values": [
+        "Approved",
+        "Closed",
+        "Denied",
+        "Paid",
+        "Under Review"
+      ]
+    },
+    {
+      "name": "adjuster_name",
+      "data_type": "VARCHAR",
+      "description": "Claims adjuster assigned to assess the claim.",
+      "nullable": false,
+      "example": "J. Brooks",
+      "domain_values": [
+        "A. Reyes",
+        "J. Brooks",
+        "K. Patel",
+        "S. Nguyen"
+      ]
+    },
+    {
+      "name": "closed_date",
+      "data_type": "DATE",
+      "description": "Date the claim was settled or closed (YYYY-MM-DD). Empty while the claim is Under Review or Approved.",
+      "nullable": true,
+      "example": "2024-06-23"
+    }
+  ]
+}

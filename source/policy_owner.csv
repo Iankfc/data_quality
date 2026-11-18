@@ -1,0 +1,21 @@
+owner_id,first_name,last_name,date_of_birth,email,phone,address,city,state,zip_code,credit_score,customer_since
+OWN1001,James,Smith,1956-02-14,james.smith@example.com,555-859-5506,4112 Cedar Ln,Denver,CO,80227,768,2014-04-19
+OWN1002,Maria,Garcia,1981-06-27,maria.garcia@example.com,555-532-1520,588 Maple Ave,Denver,CO,80237,639,2023-05-02
+OWN1003,Robert,Johnson,1980-03-05,robert.johnson@example.com,555-303-9928,6973 Cedar Ln,Austin,TX,78767,730,2018-03-28
+OWN1004,Linda,Martinez,1989-01-14,linda.martinez@example.com,555-925-3615,7024 Lakeview Blvd,Austin,TX,78745,619,2016-10-29
+OWN1005,Michael,Brown,1959-08-02,michael.brown@example.com,555-194-7224,1684 Lakeview Blvd,Raleigh,NC,27654,734,2017-12-06
+OWN1006,Patricia,Lee,1987-09-25,patricia.lee@example.com,555-570-9785,2145 Sunset Way,Austin,TX,78720,721,2018-07-29
+OWN1007,David,Davis,1980-11-24,david.davis@example.com,555-296-2139,850 Cedar Ln,Raleigh,NC,27647,600,2017-03-22
+OWN1008,Jennifer,Wilson,1972-01-19,jennifer.wilson@example.com,555-384-8428,6077 Pine Rd,Denver,CO,80257,670,2016-09-12
+OWN1009,William,Anderson,1986-06-25,william.anderson@example.com,555-799-2169,2903 Cedar Ln,Columbus,OH,43230,698,2020-07-05
+OWN1010,Elizabeth,Taylor,1983-09-16,elizabeth.taylor@example.com,555-804-4598,5413 Oak St,Columbus,OH,43239,790,2012-09-19
+OWN1011,Daniel,Thomas,1972-12-29,daniel.thomas@example.com,555-374-2084,3556 Lakeview Blvd,Raleigh,NC,27637,747,2023-03-13
+OWN1012,Susan,Moore,1994-09-07,susan.moore@example.com,555-758-8517,2440 Elm Dr,Portland,OR,97227,643,2017-11-22
+OWN1013,Thomas,Jackson,1995-04-10,thomas.jackson@example.com,555-697-7543,6030 Cedar Ln,Portland,OR,97227,710,2023-01-25
+OWN1014,Karen,White,1988-11-25,karen.white@example.com,555-148-2796,2604 Pine Rd,Denver,CO,80297,688,2013-06-04
+OWN1015,Joseph,Harris,1972-02-13,joseph.harris@example.com,555-710-8668,8769 Elm Dr,Portland,OR,97280,800,2012-04-04
+OWN1016,Nancy,Clark,1985-07-31,nancy.clark@example.com,555-649-5371,5673 Maple Ave,Denver,CO,80247,691,2015-07-19
+OWN1017,Charles,Lewis,1955-02-23,charles.lewis@example.com,555-839-5315,8301 Pine Rd,Nashville,TN,37274,813,2014-05-21
+OWN1018,Lisa,Walker,1992-10-02,lisa.walker@example.com,555-754-9317,3358 Pine Rd,Columbus,OH,43257,775,2015-08-16
+OWN1019,Mark,Hall,1981-11-13,mark.hall@example.com,555-431-9005,419 Maple Ave,Austin,TX,78756,804,2018-11-24
+OWN1020,Sandra,Young,1957-08-07,sandra.young@example.com,555-346-2290,1503 Hillcrest Ct,Tampa,FL,33618,774,2023-12-12

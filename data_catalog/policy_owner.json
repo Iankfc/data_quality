@@ -1,0 +1,109 @@
+{
+  "table_name": "policy_owner",
+  "source_file": "source/policy_owner.csv",
+  "format": "csv",
+  "description": "Policyholders (customers) who own one or more housing insurance policies. One row per owner.",
+  "grain": "One row per owner",
+  "row_count": 20,
+  "contains_pii": true,
+  "primary_key": [
+    "owner_id"
+  ],
+  "foreign_keys": [],
+  "columns": [
+    {
+      "name": "owner_id",
+      "data_type": "VARCHAR",
+      "description": "Unique identifier of the policy owner (format OWN####). Primary key; referenced by policy_coverage.owner_id.",
+      "nullable": false,
+      "example": "OWN1001",
+      "is_primary_key": true
+    },
+    {
+      "name": "first_name",
+      "data_type": "VARCHAR",
+      "description": "Owner's given name.",
+      "nullable": false,
+      "example": "James"
+    },
+    {
+      "name": "last_name",
+      "data_type": "VARCHAR",
+      "description": "Owner's family name.",
+      "nullable": false,
+      "example": "Smith"
+    },
+    {
+      "name": "date_of_birth",
+      "data_type": "DATE",
+      "description": "Owner's date of birth (YYYY-MM-DD). Used for age-based underwriting and identity verification.",
+      "nullable": false,
+      "example": "1956-02-14"
+    },
+    {
+      "name": "email",
+      "data_type": "VARCHAR",
+      "description": "Owner's contact email address.",
+      "nullable": false,
+      "example": "james.smith@example.com"
+    },
+    {
+      "name": "phone",
+      "data_type": "VARCHAR",
+      "description": "Owner's contact phone number (format 555-###-####).",
+      "nullable": false,
+      "example": "555-859-5506"
+    },
+    {
+      "name": "address",
+      "data_type": "VARCHAR",
+      "description": "Owner's mailing street address. May differ from the insured property address.",
+      "nullable": false,
+      "example": "4112 Cedar Ln"
+    },
+    {
+      "name": "city",
+      "data_type": "VARCHAR",
+      "description": "City of the owner's mailing address.",
+      "nullable": false,
+      "example": "Denver"
+    },
+    {
+      "name": "state",
+      "data_type": "VARCHAR",
+      "description": "Two-letter US state code of the owner's mailing address.",
+      "nullable": false,
+      "example": "CO",
+      "domain_values": [
+        "CO",
+        "FL",
+        "NC",
+        "OH",
+        "OR",
+        "TN",
+        "TX"
+      ]
+    },
+    {
+      "name": "zip_code",
+      "data_type": "VARCHAR",
+      "description": "5-digit US ZIP code of the owner's mailing address. Stored as text to preserve leading zeros.",
+      "nullable": false,
+      "example": "80227"
+    },
+    {
+      "name": "credit_score",
+      "data_type": "BIGINT",
+      "description": "Owner's credit-based insurance score (300-850). Used as a rating factor for premium calculation.",
+      "nullable": false,
+      "example": "768"
+    },
+    {
+      "name": "customer_since",
+      "data_type": "DATE",
+      "description": "Date the owner first became a customer of the insurer (YYYY-MM-DD).",
+      "nullable": false,
+      "example": "2014-04-19"
+    }
+  ]
+}
