@@ -223,6 +223,100 @@ The lists are the unique values found in the source data, and they match `domain
 - `state` and `property_state` list only the states in the sample data. If the data grows, validate against the full list of US state codes instead.
 - Quantitative numeric columns (amounts, limits, counts, years, scores) are excluded even when they have few distinct values, for example `liability_coverage` and `deductible`. Validate them with range checks instead.
 
+##### Value definitions
+
+What each unique value means. A value with no clear meaning here should be questioned before the data is accepted.
+
+**`policy_owner.state` and `policy_coverage.property_state`**
+
+Both columns use the same two-letter US state codes. `state` is the state of the **owner's mailing address**. `property_state` is the state where the **insured home** is.
+
+| Value | Meaning |
+|---|---|
+| `CO` | Colorado |
+| `FL` | Florida |
+| `NC` | North Carolina |
+| `OH` | Ohio |
+| `OR` | Oregon |
+| `TN` | Tennessee |
+| `TX` | Texas |
+
+**`policy_coverage.policy_type`**
+
+| Value | Meaning |
+|---|---|
+| `HO-3 Standard` | Most common homeowners policy. Covers the house against all causes of loss unless excluded, and belongings against named causes only (fire, theft, wind and so on) |
+| `HO-5 Premium` | Broadest homeowners policy. Covers both the house and belongings against all causes unless excluded |
+| `HO-6 Condo` | Condominium unit owner policy. Covers the inside of the unit, improvements and belongings; the building itself is covered by the condo association |
+| `HO-4 Renters` | Renters policy. Covers belongings and liability only, no building |
+| `DP-3 Dwelling` | Dwelling fire policy for a home the owner does not live in, usually a rental property |
+
+**`policy_coverage.construction_type`**
+
+| Value | Meaning |
+|---|---|
+| `Wood Frame` | Structure built from a timber frame |
+| `Brick` | Brick or brick-veneer walls |
+| `Masonry` | Concrete block or stone walls |
+| `Concrete` | Poured or precast concrete |
+| `Steel Frame` | Structure built on a steel frame |
+
+**`policy_coverage.flood_coverage` and `policy_coverage.earthquake_coverage`**
+
+| Value | Meaning |
+|---|---|
+| `Y` | Yes: the optional cover is added to the policy |
+| `N` | No: the optional cover is not included |
+
+A `Flood` claim on a policy with `flood_coverage` = `N` is not covered and would normally be denied.
+
+**Finding in the current data:** `CLM90015` is a `Flood` claim with status `Paid` on a policy with `flood_coverage` = `N`. Either the claim type is wrong, the cover flag is wrong, or the claim was paid in error. Confirm with the claims team. (`CLM90011`, the other Flood claim without cover, is correctly `Denied`.)
+
+**`policy_coverage.status`**
+
+| Value | Meaning |
+|---|---|
+| `Active` | Policy is currently in force (today is between `start_date` and `end_date`) |
+| `Renewed` | Term has ended and has been replaced by a new term |
+| `Expired` | Term has ended and was not renewed |
+| `Cancelled` | Policy was ended before its `end_date`, by the owner or the insurer |
+
+**`policy_claims.claim_type`**
+
+| Value | Meaning |
+|---|---|
+| `Water Damage` | Sudden water escape inside the home (burst pipe, appliance leak) |
+| `Fire` | Damage from fire or smoke |
+| `Theft` | Belongings stolen, or damage during a break-in |
+| `Wind/Hail` | Damage from windstorms, hurricanes or hail |
+| `Liability` | Owner is responsible for injury to someone else or damage to their property |
+| `Vandalism` | Deliberate damage by someone else |
+| `Flood` | Rising surface water entering the home |
+| `Mold` | Mold growth, usually after water damage |
+
+**`policy_claims.claim_status`**
+
+The values follow the claim workflow: `Under Review` → `Approved` or `Denied` → `Paid` → `Closed`.
+
+| Value | Meaning |
+|---|---|
+| `Under Review` | Claim received and being assessed by an adjuster |
+| `Approved` | Claim accepted and an amount agreed, but not paid yet |
+| `Paid` | Payment has been issued to the owner |
+| `Denied` | Claim rejected (not covered, under the deductible, or not valid) |
+| `Closed` | Claim file finalised with no further action |
+
+**`policy_claims.adjuster_name`**
+
+| Value | Meaning |
+|---|---|
+| `A. Reyes` | Claims adjuster (sample name) |
+| `J. Brooks` | Claims adjuster (sample name) |
+| `K. Patel` | Claims adjuster (sample name) |
+| `S. Nguyen` | Claims adjuster (sample name) |
+
+A new name appearing should be checked against the list of current adjusters rather than treated as an error straight away.
+
 **Validation logic (pseudo code):**
 ```
 FOR EACH (table_name, column_name, unique_values) IN the table above:
@@ -314,6 +408,33 @@ Checks on the model output table `policy_claims_summary`, produced by [`model/po
 **Notes:**
 - `owner_state` has 6 values, while the source `state` has 7. `OR` drops out because none of the 3 Oregon owners passes the filters: two have only Cancelled policies (BR3), and the third has only a Denied claim (BR1). A target domain that is a subset of the source domain is expected; a value outside the source domain is a failure.
 - `owner_id` and `owner_name` are identifiers, and `latest_incident_date` is a date, so they are not included.
+
+##### Value definitions
+
+The values mean the same as in the source (see 3.1.1 value definitions). This table explains what each value means **in the target table**.
+
+**`owner_state`** (from `policy_owner.state`)
+
+| Value | Meaning |
+|---|---|
+| `CO` | Owner's mailing address is in Colorado |
+| `FL` | Owner's mailing address is in Florida |
+| `NC` | Owner's mailing address is in North Carolina |
+| `OH` | Owner's mailing address is in Ohio |
+| `TN` | Owner's mailing address is in Tennessee |
+| `TX` | Owner's mailing address is in Texas |
+
+`OR` (Oregon) is a valid value but is not in the current output, because no Oregon owner passes the filters (see Notes above).
+
+**`policy_type`** (from `policy_coverage.policy_type`)
+
+| Value | Meaning |
+|---|---|
+| `HO-3 Standard` | The row covers the owner's standard homeowners policies |
+| `HO-5 Premium` | The row covers the owner's premium (broadest) homeowners policies |
+| `HO-6 Condo` | The row covers the owner's condo unit policies |
+| `HO-4 Renters` | The row covers the owner's renters policies |
+| `DP-3 Dwelling` | The row covers the owner's rental (landlord) properties |
 
 **Validation logic (pseudo code):**
 ```
