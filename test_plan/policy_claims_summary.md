@@ -75,7 +75,7 @@ policy_claims_summary                           GROUP BY owner_id, policy_type  
 
 ## 2. Source tables
 
-All sources are CSV files in [`source/`](../source/). The full column definitions, data types and `domain_value` lists are in the data catalog JSON files.
+All sources are CSV files in [`source/`](../source/). The full column definitions, data types and `domain_values` lists are in the data catalog JSON files.
 
 ### 2.1 `policy_owner`
 
@@ -188,3 +188,48 @@ All sources are CSV files in [`source/`](../source/). The full column definition
 - No owner has a credit score below 600, so BR4 doesn't remove any rows yet.
 
 Add test records that cover both cases (an Active policy, and an owner with a credit score below 600) to confirm these rules work.
+
+---
+
+## 3. Domain validation
+
+**Rule:** every value in a categorical column must be one of the column's unique values listed below. A value not on the list, an empty value, or a value with different case or extra spaces (for example `paid` or `Paid `) fails the check.
+
+The lists are the unique values found in the source data, and they match `domain_values` in the [data catalog](../data_catalog/). Only categorical columns are included, meaning columns that hold a fixed set of codes or labels; IDs, names, dates and amounts are not.
+
+| table_name | column_name | data_type | unique_count | unique_values |
+|---|---|---|---|---|
+| `policy_owner` | `state` | VARCHAR | 7 | `CO`, `FL`, `NC`, `OH`, `OR`, `TN`, `TX` |
+| `policy_coverage` | `policy_type` | VARCHAR | 5 | `DP-3 Dwelling`, `HO-3 Standard`, `HO-4 Renters`, `HO-5 Premium`, `HO-6 Condo` |
+| `policy_coverage` | `property_state` | VARCHAR | 7 | `CO`, `FL`, `NC`, `OH`, `OR`, `TN`, `TX` |
+| `policy_coverage` | `construction_type` | VARCHAR | 5 | `Brick`, `Concrete`, `Masonry`, `Steel Frame`, `Wood Frame` |
+| `policy_coverage` | `liability_coverage` | BIGINT | 3 | `100000`, `300000`, `500000` |
+| `policy_coverage` | `deductible` | BIGINT | 5 | `500`, `1000`, `1500`, `2500`, `5000` |
+| `policy_coverage` | `flood_coverage` | VARCHAR | 2 | `N`, `Y` |
+| `policy_coverage` | `earthquake_coverage` | VARCHAR | 2 | `N`, `Y` |
+| `policy_coverage` | `status` | VARCHAR | 3 | `Cancelled`, `Expired`, `Renewed` |
+| `policy_claims` | `claim_type` | VARCHAR | 8 | `Fire`, `Flood`, `Liability`, `Mold`, `Theft`, `Vandalism`, `Water Damage`, `Wind/Hail` |
+| `policy_claims` | `claim_status` | VARCHAR | 5 | `Approved`, `Closed`, `Denied`, `Paid`, `Under Review` |
+| `policy_claims` | `adjuster_name` | VARCHAR | 4 | `A. Reyes`, `J. Brooks`, `K. Patel`, `S. Nguyen` |
+
+**Notes:**
+- `policy_coverage.status`: `Active` is a valid business value (the model filters on it in BR3), but it does not appear in the current data. Add it to the allowed list for the validation, or an Active policy will be flagged incorrectly.
+- `state` and `property_state` list only the states in the sample data. If the data grows, validate against the full list of US state codes instead.
+- `liability_coverage` and `deductible` are numbers, but they are treated as categories because only fixed amounts can be chosen.
+
+**Validation logic (pseudo code):**
+```
+FOR EACH (table_name, column_name, unique_values) IN the table above:
+    FOR EACH row IN table_name:
+        IF row.column_name IS empty OR row.column_name NOT IN unique_values:
+            report FAIL (table_name, column_name, row key, bad value)
+    IF no failures: report PASS (table_name, column_name)
+```
+
+**Example check (DuckDB):** should return 0 rows.
+```sql
+SELECT claim_id, claim_status
+FROM read_csv_auto('source/policy_claims.csv')
+WHERE claim_status IS NULL
+   OR claim_status NOT IN ('Approved', 'Closed', 'Denied', 'Paid', 'Under Review');
+```
