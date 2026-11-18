@@ -193,9 +193,13 @@ Add test records that cover both cases (an Active policy, and an owner with a cr
 
 ## 3. Domain validation
 
+Domain validation checks that each column only holds values from its expected domain.
+
+### 3.1 Categorical columns
+
 **Rule:** every value in a categorical column must be one of the column's unique values listed below. A value not on the list, an empty value, or a value with different case or extra spaces (for example `paid` or `Paid `) fails the check.
 
-The lists are the unique values found in the source data, and they match `domain_values` in the [data catalog](../data_catalog/). Only categorical columns are included, meaning columns that hold a fixed set of codes or labels; IDs, names, dates and amounts are not.
+The lists are the unique values found in the source data, and they match `domain_values` in the [data catalog](../data_catalog/). Only categorical columns are included, both nominal (for example `claim_type`) and ordinal (for example `claim_status`, which follows a workflow order). IDs, names, dates and quantitative numeric columns are not.
 
 | table_name | column_name | data_type | unique_count | unique_values |
 |---|---|---|---|---|
@@ -203,8 +207,6 @@ The lists are the unique values found in the source data, and they match `domain
 | `policy_coverage` | `policy_type` | VARCHAR | 5 | `DP-3 Dwelling`, `HO-3 Standard`, `HO-4 Renters`, `HO-5 Premium`, `HO-6 Condo` |
 | `policy_coverage` | `property_state` | VARCHAR | 7 | `CO`, `FL`, `NC`, `OH`, `OR`, `TN`, `TX` |
 | `policy_coverage` | `construction_type` | VARCHAR | 5 | `Brick`, `Concrete`, `Masonry`, `Steel Frame`, `Wood Frame` |
-| `policy_coverage` | `liability_coverage` | BIGINT | 3 | `100000`, `300000`, `500000` |
-| `policy_coverage` | `deductible` | BIGINT | 5 | `500`, `1000`, `1500`, `2500`, `5000` |
 | `policy_coverage` | `flood_coverage` | VARCHAR | 2 | `N`, `Y` |
 | `policy_coverage` | `earthquake_coverage` | VARCHAR | 2 | `N`, `Y` |
 | `policy_coverage` | `status` | VARCHAR | 3 | `Cancelled`, `Expired`, `Renewed` |
@@ -215,7 +217,7 @@ The lists are the unique values found in the source data, and they match `domain
 **Notes:**
 - `policy_coverage.status`: `Active` is a valid business value (the model filters on it in BR3), but it does not appear in the current data. Add it to the allowed list for the validation, or an Active policy will be flagged incorrectly.
 - `state` and `property_state` list only the states in the sample data. If the data grows, validate against the full list of US state codes instead.
-- `liability_coverage` and `deductible` are numbers, but they are treated as categories because only fixed amounts can be chosen.
+- Quantitative numeric columns (amounts, limits, counts, years, scores) are excluded even when they have few distinct values, for example `liability_coverage` and `deductible`. Validate them with range checks instead.
 
 **Validation logic (pseudo code):**
 ```
@@ -232,4 +234,62 @@ SELECT claim_id, claim_status
 FROM read_csv_auto('source/policy_claims.csv')
 WHERE claim_status IS NULL
    OR claim_status NOT IN ('Approved', 'Closed', 'Denied', 'Paid', 'Under Review');
+```
+
+### 3.2 Numerical (quantitative) columns
+
+**Rule:** every value in a numeric column must be filled in and fall inside the column's expected range. The distribution stats below are a baseline from the current data. When new data arrives, a large shift from this baseline (for example the median doubling, or many more zeros) should be investigated even if every value is within range.
+
+Only quantitative columns are included: amounts, limits, scores and years. Identifiers and codes stored as numbers (such as `zip_code`) are not.
+
+#### Distribution stats (baseline from source data)
+
+| table_name | column_name | data_type | count | null_count | zero_count | min | p25 | median | mean | p75 | max | std_dev |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `policy_owner` | `credit_score` | BIGINT | 20 | 0 | 0 | 600 | 683.5 | 725.5 | 720.7 | 774.25 | 813 | 64.2 |
+| `policy_coverage` | `year_built` | BIGINT | 25 | 0 | 0 | 1954 | 1965 | 1989 | 1985.6 | 2004 | 2020 | 20.24 |
+| `policy_coverage` | `dwelling_coverage` | BIGINT | 25 | 0 | 5 | 0 | 245,000 | 365,000 | 381,200 | 580,000 | 765,000 | 247,117.89 |
+| `policy_coverage` | `personal_property_coverage` | BIGINT | 25 | 0 | 0 | 35,000 | 80,000 | 135,000 | 136,800 | 205,000 | 240,000 | 68,112.65 |
+| `policy_coverage` | `liability_coverage` | BIGINT | 25 | 0 | 0 | 100,000 | 300,000 | 300,000 | 332,000 | 500,000 | 500,000 | 160,000 |
+| `policy_coverage` | `deductible` | BIGINT | 25 | 0 | 0 | 500 | 1,000 | 1,500 | 1,920 | 2,500 | 5,000 | 1,662.58 |
+| `policy_coverage` | `annual_premium` | DOUBLE | 25 | 0 | 0 | 199.25 | 1,030.59 | 1,821.25 | 1,803.05 | 2,308.48 | 3,808.81 | 934.31 |
+| `policy_claims` | `claim_amount` | DOUBLE | 35 | 0 | 0 | 1,947.49 | 16,971.99 | 33,666.43 | 31,516.94 | 44,573.02 | 59,800.58 | 17,754.55 |
+| `policy_claims` | `approved_amount` | DOUBLE | 35 | 0 | 15 | 0 | 0 | 5,451.58 | 12,486.97 | 25,909.42 | 41,594.12 | 14,831.59 |
+
+p25 and p75 are the 25th and 75th percentiles: half of the values fall between them. std_dev is the sample standard deviation. All amounts are in USD.
+
+#### Expected range (validation rules)
+
+| table_name | column_name | Expected range | Notes |
+|---|---|---|---|
+| `policy_owner` | `credit_score` | 300 – 850 | Standard credit score scale |
+| `policy_coverage` | `year_built` | 1800 – current year | A year in the future is invalid |
+| `policy_coverage` | `dwelling_coverage` | ≥ 0 | Must be 0 when `policy_type` = HO-4 Renters, and > 0 for every other type. All 5 zeros in the current data are HO-4 Renters |
+| `policy_coverage` | `personal_property_coverage` | > 0 | |
+| `policy_coverage` | `liability_coverage` | > 0 | |
+| `policy_coverage` | `deductible` | > 0 | |
+| `policy_coverage` | `annual_premium` | > 0 | |
+| `policy_claims` | `claim_amount` | > 0 | A claim must request some amount |
+| `policy_claims` | `approved_amount` | 0 – `claim_amount` | Cannot exceed the amount claimed. Must be 0 when `claim_status` is Denied or Under Review. All 15 zeros in the current data are Denied or Under Review |
+
+**Validation logic (pseudo code):**
+```
+FOR EACH (table_name, column_name, expected_range) IN the table above:
+    FOR EACH row IN table_name:
+        IF row.column_name IS empty OR row.column_name OUTSIDE expected_range:
+            report FAIL (table_name, column_name, row key, bad value)
+    IF no failures: report PASS (table_name, column_name)
+
+FOR EACH column: compare new min / median / max / zero_count with the baseline
+    IF the change is large: report WARN for review
+```
+
+**Example check (DuckDB):** should return 0 rows.
+```sql
+SELECT claim_id, claim_status, claim_amount, approved_amount
+FROM read_csv_auto('source/policy_claims.csv')
+WHERE approved_amount IS NULL
+   OR approved_amount < 0
+   OR approved_amount > claim_amount
+   OR (claim_status IN ('Denied', 'Under Review') AND approved_amount <> 0);
 ```
