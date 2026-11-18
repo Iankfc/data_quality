@@ -293,3 +293,78 @@ WHERE approved_amount IS NULL
    OR approved_amount > claim_amount
    OR (claim_status IN ('Denied', 'Under Review') AND approved_amount <> 0);
 ```
+
+---
+
+## 4. Data profiling
+
+Null and zero profile of every column in the three source tables, as of 2026-11-18. Use it as the baseline to compare new data loads against.
+
+How each measure is calculated:
+- **null_pct** = null_count / row_count × 100. An empty field in the CSV counts as null.
+- **zero_count / non_zero_count / zero_pct** apply only to numeric columns (`–` for text and date columns). non_zero_count = non_null_count − zero_count, and zero_pct = zero_count / non_null_count × 100.
+
+| table_name | column_name | data_type | row_count | non_null_count | null_count | null_pct | zero_count | non_zero_count | zero_pct |
+|---|---|---|---|---|---|---|---|---|---|
+| `policy_owner` | `owner_id` | VARCHAR | 20 | 20 | 0 | 0.0% | – | – | – |
+| `policy_owner` | `first_name` | VARCHAR | 20 | 20 | 0 | 0.0% | – | – | – |
+| `policy_owner` | `last_name` | VARCHAR | 20 | 20 | 0 | 0.0% | – | – | – |
+| `policy_owner` | `date_of_birth` | DATE | 20 | 20 | 0 | 0.0% | – | – | – |
+| `policy_owner` | `email` | VARCHAR | 20 | 20 | 0 | 0.0% | – | – | – |
+| `policy_owner` | `phone` | VARCHAR | 20 | 20 | 0 | 0.0% | – | – | – |
+| `policy_owner` | `address` | VARCHAR | 20 | 20 | 0 | 0.0% | – | – | – |
+| `policy_owner` | `city` | VARCHAR | 20 | 20 | 0 | 0.0% | – | – | – |
+| `policy_owner` | `state` | VARCHAR | 20 | 20 | 0 | 0.0% | – | – | – |
+| `policy_owner` | `zip_code` | VARCHAR | 20 | 20 | 0 | 0.0% | – | – | – |
+| `policy_owner` | `credit_score` | BIGINT | 20 | 20 | 0 | 0.0% | 0 | 20 | 0.0% |
+| `policy_owner` | `customer_since` | DATE | 20 | 20 | 0 | 0.0% | – | – | – |
+| `policy_coverage` | `policy_id` | VARCHAR | 25 | 25 | 0 | 0.0% | – | – | – |
+| `policy_coverage` | `owner_id` | VARCHAR | 25 | 25 | 0 | 0.0% | – | – | – |
+| `policy_coverage` | `policy_type` | VARCHAR | 25 | 25 | 0 | 0.0% | – | – | – |
+| `policy_coverage` | `property_address` | VARCHAR | 25 | 25 | 0 | 0.0% | – | – | – |
+| `policy_coverage` | `property_city` | VARCHAR | 25 | 25 | 0 | 0.0% | – | – | – |
+| `policy_coverage` | `property_state` | VARCHAR | 25 | 25 | 0 | 0.0% | – | – | – |
+| `policy_coverage` | `year_built` | BIGINT | 25 | 25 | 0 | 0.0% | 0 | 25 | 0.0% |
+| `policy_coverage` | `construction_type` | VARCHAR | 25 | 25 | 0 | 0.0% | – | – | – |
+| `policy_coverage` | `dwelling_coverage` | BIGINT | 25 | 25 | 0 | 0.0% | **5** | 20 | **20.0%** |
+| `policy_coverage` | `personal_property_coverage` | BIGINT | 25 | 25 | 0 | 0.0% | 0 | 25 | 0.0% |
+| `policy_coverage` | `liability_coverage` | BIGINT | 25 | 25 | 0 | 0.0% | 0 | 25 | 0.0% |
+| `policy_coverage` | `deductible` | BIGINT | 25 | 25 | 0 | 0.0% | 0 | 25 | 0.0% |
+| `policy_coverage` | `flood_coverage` | VARCHAR | 25 | 25 | 0 | 0.0% | – | – | – |
+| `policy_coverage` | `earthquake_coverage` | VARCHAR | 25 | 25 | 0 | 0.0% | – | – | – |
+| `policy_coverage` | `annual_premium` | DOUBLE | 25 | 25 | 0 | 0.0% | 0 | 25 | 0.0% |
+| `policy_coverage` | `start_date` | DATE | 25 | 25 | 0 | 0.0% | – | – | – |
+| `policy_coverage` | `end_date` | DATE | 25 | 25 | 0 | 0.0% | – | – | – |
+| `policy_coverage` | `status` | VARCHAR | 25 | 25 | 0 | 0.0% | – | – | – |
+| `policy_claims` | `claim_id` | VARCHAR | 35 | 35 | 0 | 0.0% | – | – | – |
+| `policy_claims` | `policy_id` | VARCHAR | 35 | 35 | 0 | 0.0% | – | – | – |
+| `policy_claims` | `claim_type` | VARCHAR | 35 | 35 | 0 | 0.0% | – | – | – |
+| `policy_claims` | `incident_date` | DATE | 35 | 35 | 0 | 0.0% | – | – | – |
+| `policy_claims` | `reported_date` | DATE | 35 | 35 | 0 | 0.0% | – | – | – |
+| `policy_claims` | `claim_amount` | DOUBLE | 35 | 35 | 0 | 0.0% | 0 | 35 | 0.0% |
+| `policy_claims` | `approved_amount` | DOUBLE | 35 | 35 | 0 | 0.0% | **15** | 20 | **42.9%** |
+| `policy_claims` | `claim_status` | VARCHAR | 35 | 35 | 0 | 0.0% | – | – | – |
+| `policy_claims` | `adjuster_name` | VARCHAR | 35 | 35 | 0 | 0.0% | – | – | – |
+| `policy_claims` | `closed_date` | DATE | 35 | 22 | **13** | **37.1%** | – | – | – |
+
+**Findings** (values in bold above):
+
+| Column | Finding | Expected? |
+|---|---|---|
+| `policy_claims.closed_date` | 13 nulls (37.1%) | Yes. All 13 are open claims (9 Under Review, 4 Approved), which have no closed date yet |
+| `policy_coverage.dwelling_coverage` | 5 zeros (20.0%) | Yes. All 5 are HO-4 Renters policies, which have no dwelling cover |
+| `policy_claims.approved_amount` | 15 zeros (42.9%) | Yes. All 15 are Denied or Under Review claims |
+| All other columns | No nulls, no zeros | Yes |
+
+**Profiling logic (pseudo code):**
+```
+FOR EACH table, FOR EACH column:
+    row_count      = number of rows
+    non_null_count = rows where column is filled in
+    null_count     = row_count − non_null_count
+    null_pct       = null_count / row_count × 100
+    IF column is numeric:
+        zero_count     = rows where column = 0
+        non_zero_count = non_null_count − zero_count
+        zero_pct       = zero_count / non_null_count × 100
+```
