@@ -195,7 +195,11 @@ Add test records that cover both cases (an Active policy, and an owner with a cr
 
 Domain validation checks that each column only holds values from its expected domain.
 
-### 3.1 Categorical columns
+### 3.1 Source
+
+Checks on the source tables (`policy_owner`, `policy_coverage`, `policy_claims`) in [`source/`](../source/).
+
+#### 3.1.1 Categorical columns
 
 **Rule:** every value in a categorical column must be one of the column's unique values listed below. A value not on the list, an empty value, or a value with different case or extra spaces (for example `paid` or `Paid `) fails the check.
 
@@ -236,13 +240,13 @@ WHERE claim_status IS NULL
    OR claim_status NOT IN ('Approved', 'Closed', 'Denied', 'Paid', 'Under Review');
 ```
 
-### 3.2 Numerical (quantitative) columns
+#### 3.1.2 Numerical (quantitative) columns
 
 **Rule:** every value in a numeric column must be filled in and fall inside the column's expected range. The distribution stats below are a baseline from the current data. When new data arrives, a large shift from this baseline (for example the median doubling, or many more zeros) should be investigated even if every value is within range.
 
 Only quantitative columns are included: amounts, limits, scores and years. Identifiers and codes stored as numbers (such as `zip_code`) are not.
 
-#### Distribution stats (baseline from source data)
+##### Distribution stats (baseline from source data)
 
 | table_name | column_name | data_type | count | null_count | zero_count | min | p25 | median | mean | p75 | max | std_dev |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -258,7 +262,7 @@ Only quantitative columns are included: amounts, limits, scores and years. Ident
 
 p25 and p75 are the 25th and 75th percentiles: half of the values fall between them. std_dev is the sample standard deviation. All amounts are in USD.
 
-#### Expected range (validation rules)
+##### Expected range (validation rules)
 
 | table_name | column_name | Expected range | Notes |
 |---|---|---|---|
@@ -294,9 +298,100 @@ WHERE approved_amount IS NULL
    OR (claim_status IN ('Denied', 'Under Review') AND approved_amount <> 0);
 ```
 
+### 3.2 Target
+
+Checks on the model output table `policy_claims_summary`, produced by [`model/policy_claims_summary.sql`](../model/policy_claims_summary.sql). The example checks assume the output has been loaded as a table, for example by running `CREATE TABLE policy_claims_summary AS <model query>` in a DuckDB database file (`run_sql.py --db`).
+
+#### 3.2.1 Categorical columns
+
+**Rule:** every value must be one of the values listed below, **and** must exist in the matching source column's domain (3.1.1). The model only passes values through, so a target value that is not in the source means the transformation is wrong.
+
+| table_name | column_name | data_type | unique_count | unique_values | Source domain |
+|---|---|---|---|---|---|
+| `policy_claims_summary` | `owner_state` | VARCHAR | 6 | `CO`, `FL`, `NC`, `OH`, `TN`, `TX` | `policy_owner.state` |
+| `policy_claims_summary` | `policy_type` | VARCHAR | 5 | `DP-3 Dwelling`, `HO-3 Standard`, `HO-4 Renters`, `HO-5 Premium`, `HO-6 Condo` | `policy_coverage.policy_type` |
+
+**Notes:**
+- `owner_state` has 6 values, while the source `state` has 7. `OR` drops out because none of the 3 Oregon owners passes the filters: two have only Cancelled policies (BR3), and the third has only a Denied claim (BR1). A target domain that is a subset of the source domain is expected; a value outside the source domain is a failure.
+- `owner_id` and `owner_name` are identifiers, and `latest_incident_date` is a date, so they are not included.
+
+**Validation logic (pseudo code):**
+```
+FOR EACH (column_name, unique_values, source_domain) IN the table above:
+    FOR EACH row IN policy_claims_summary:
+        IF row.column_name IS empty
+           OR row.column_name NOT IN unique_values
+           OR row.column_name NOT IN source_domain:
+            report FAIL (column_name, owner_id, policy_type, bad value)
+    IF no failures: report PASS (column_name)
+```
+
+**Example check (DuckDB):** should return 0 rows.
+```sql
+SELECT t.owner_id, t.policy_type
+FROM policy_claims_summary AS t
+WHERE t.policy_type IS NULL
+   OR t.policy_type NOT IN (SELECT DISTINCT policy_type
+                            FROM read_csv_auto('source/policy_coverage.csv'));
+```
+
+#### 3.2.2 Numerical (quantitative) columns
+
+**Rule:** every value must be filled in and fall inside the expected range. The distribution stats below are a baseline from the current model output.
+
+##### Distribution stats (baseline from target data)
+
+| table_name | column_name | data_type | count | null_count | zero_count | min | p25 | median | mean | p75 | max | std_dev |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `policy_claims_summary` | `policy_count` | BIGINT | 11 | 0 | 0 | 1 | 1 | 1 | 1 | 1 | 1 | 0 |
+| `policy_claims_summary` | `total_annual_premium` | DOUBLE | 11 | 0 | 0 | 199.25 | 993.87 | 1,370.23 | 1,804.33 | 2,573.59 | 3,808.81 | 1,163.09 |
+| `policy_claims_summary` | `claim_count` | HUGEINT | 11 | 0 | 0 | 1 | 1 | 2 | 1.55 | 2 | 2 | 0.52 |
+| `policy_claims_summary` | `total_claimed` | DOUBLE | 11 | 0 | 0 | 3,772.93 | 14,549.73 | 40,397.32 | 42,847.37 | 60,141.21 | 98,955.95 | 30,930.97 |
+| `policy_claims_summary` | `total_approved` | DOUBLE | 11 | 0 | 2 | 0 | 4,049.98 | 27,318.85 | 21,567.93 | 32,271.43 | 53,553.52 | 18,200.92 |
+| `policy_claims_summary` | `approval_rate_pct` | DOUBLE | 11 | 0 | 2 | 0 | 32.25 | 69.1 | 52.53 | 71.4 | 88.5 | 32 |
+
+p25 and p75 are the 25th and 75th percentiles. std_dev is the sample standard deviation. All amounts are in USD; `approval_rate_pct` is a percentage.
+
+##### Expected range (validation rules)
+
+| table_name | column_name | Expected range | Notes |
+|---|---|---|---|
+| `policy_claims_summary` | `policy_count` | ≥ 1 | Every row comes from at least one policy. In the current data it is always 1, so the case where an owner has two policies of the same type is not tested yet |
+| `policy_claims_summary` | `total_annual_premium` | > 0 | Must equal the sum of `annual_premium` of the row's policies in the source |
+| `policy_claims_summary` | `claim_count` | ≥ 1 | Rows with no non-denied claims are removed (BR5) |
+| `policy_claims_summary` | `total_claimed` | > 0 | Follows from `claim_count` ≥ 1 and source `claim_amount` > 0 |
+| `policy_claims_summary` | `total_approved` | 0 – `total_claimed` | 0 when every non-denied claim in the row is still Under Review. Both zeros in the current data are this case (`OWN1001` DP-3 Dwelling, `OWN1014` HO-6 Condo) |
+| `policy_claims_summary` | `approval_rate_pct` | 0 – 100 | Must equal `total_approved / total_claimed × 100`, rounded to 1 decimal. Never null, because `total_claimed` > 0 |
+
+**Validation logic (pseudo code):**
+```
+FOR EACH (column_name, expected_range) IN the table above:
+    FOR EACH row IN policy_claims_summary:
+        IF row.column_name IS empty OR row.column_name OUTSIDE expected_range:
+            report FAIL (column_name, owner_id, policy_type, bad value)
+    IF no failures: report PASS (column_name)
+
+FOR EACH column: compare new min / median / max / zero_count with the baseline
+    IF the change is large: report WARN for review
+```
+
+**Example check (DuckDB):** should return 0 rows.
+```sql
+SELECT owner_id, policy_type, total_claimed, total_approved, approval_rate_pct
+FROM policy_claims_summary
+WHERE claim_count < 1
+   OR total_claimed <= 0
+   OR total_approved < 0
+   OR total_approved > total_claimed
+   OR approval_rate_pct NOT BETWEEN 0 AND 100
+   OR approval_rate_pct <> ROUND(total_approved / total_claimed * 100, 1);
+```
+
 ---
 
 ## 4. Data profiling
+
+### 4.1 Source
 
 Null and zero profile of every column in the three source tables, as of 2026-11-18. Use it as the baseline to compare new data loads against.
 
@@ -368,3 +463,29 @@ FOR EACH table, FOR EACH column:
         non_zero_count = non_null_count − zero_count
         zero_pct       = zero_count / non_null_count × 100
 ```
+
+### 4.2 Target
+
+Null and zero profile of every column in the model output table `policy_claims_summary`, as of 2026-11-18. The measures are calculated the same way as in 4.1.
+
+| table_name | column_name | data_type | row_count | non_null_count | null_count | null_pct | zero_count | non_zero_count | zero_pct |
+|---|---|---|---|---|---|---|---|---|---|
+| `policy_claims_summary` | `owner_id` | VARCHAR | 11 | 11 | 0 | 0.0% | – | – | – |
+| `policy_claims_summary` | `owner_name` | VARCHAR | 11 | 11 | 0 | 0.0% | – | – | – |
+| `policy_claims_summary` | `owner_state` | VARCHAR | 11 | 11 | 0 | 0.0% | – | – | – |
+| `policy_claims_summary` | `policy_type` | VARCHAR | 11 | 11 | 0 | 0.0% | – | – | – |
+| `policy_claims_summary` | `policy_count` | BIGINT | 11 | 11 | 0 | 0.0% | 0 | 11 | 0.0% |
+| `policy_claims_summary` | `total_annual_premium` | DOUBLE | 11 | 11 | 0 | 0.0% | 0 | 11 | 0.0% |
+| `policy_claims_summary` | `claim_count` | HUGEINT | 11 | 11 | 0 | 0.0% | 0 | 11 | 0.0% |
+| `policy_claims_summary` | `total_claimed` | DOUBLE | 11 | 11 | 0 | 0.0% | 0 | 11 | 0.0% |
+| `policy_claims_summary` | `total_approved` | DOUBLE | 11 | 11 | 0 | 0.0% | **2** | 9 | **18.2%** |
+| `policy_claims_summary` | `latest_incident_date` | DATE | 11 | 11 | 0 | 0.0% | – | – | – |
+| `policy_claims_summary` | `approval_rate_pct` | DOUBLE | 11 | 11 | 0 | 0.0% | **2** | 9 | **18.2%** |
+
+**Findings** (values in bold above):
+
+| Column | Finding | Expected? |
+|---|---|---|
+| `total_approved` | 2 zeros (18.2%) | Yes. Both rows have only Under Review claims left after denied claims are removed (BR1), and Under Review claims have `approved_amount` = 0 |
+| `approval_rate_pct` | 2 zeros (18.2%) | Yes. Same 2 rows: 0 approved ÷ amount claimed = 0% |
+| All other columns | No nulls, no zeros | Yes. `claim_count` ≥ 1 for every row (BR5), so `latest_incident_date` and `approval_rate_pct` are never null |
