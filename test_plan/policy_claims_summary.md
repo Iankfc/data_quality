@@ -27,18 +27,18 @@ Typical uses are underwriting and renewal reviews (spotting owners with high cla
 
 ### Business rules applied
 
-| # | Rule | Where in SQL | Effect |
+| # | Rule | Derivation logic (pseudo code) | Effect |
 |---|---|---|---|
-| BR1 | Denied claims are excluded | `claims_per_policy` CTE: `WHERE claim_status <> 'Denied'` | Denied claims do not count in `claim_count`, `total_claimed`, `total_approved` or `latest_incident_date` |
-| BR2 | Claims are totalled per policy **before** joining | `claims_per_policy` CTE: `GROUP BY policy_id` | Stops a policy's premium being counted once per claim (join fan-out) |
-| BR3 | Cancelled policies are excluded | `WHERE p.status IN ('Active','Renewed','Expired')` | Cancelled policies and their claims are left out |
-| BR4 | Owners with a credit score below 600 are excluded | `WHERE o.credit_score >= 600` | Low-score owners are left out |
-| BR5 | Only rows with at least one claim are kept | `HAVING SUM(COALESCE(c.claim_count,0)) > 0` | Owner + policy type groups with no (non-denied) claims are left out |
-| BR6 | Policies with no claims still contribute premium | `LEFT JOIN claims_per_policy` | Inside a kept group, a claim-free policy still adds to `policy_count` and `total_annual_premium` |
-| BR7 | Missing claim values count as 0 | `COALESCE(..., 0)` | Totals are never NULL |
-| BR8 | Approval rate avoids dividing by zero | `NULLIF(SUM(c.total_claimed), 0)` | `approval_rate_pct` is NULL rather than an error when nothing was claimed |
-| BR9 | Money and percentage columns are rounded | `ROUND(..., 2)` / `ROUND(..., 1)` | 2 decimals for USD, 1 decimal for % |
-| BR10 | Sort order | `ORDER BY total_claimed DESC` | Highest claimed amount first |
+| BR1 | Denied claims are excluded | `FOR EACH claim:`<br>`  IF claim.claim_status = 'Denied' THEN skip claim`<br>`  ELSE keep claim` | Denied claims do not count in `claim_count`, `total_claimed`, `total_approved` or `latest_incident_date` |
+| BR2 | Claims are totalled per policy **before** joining | `FOR EACH policy_id IN kept claims:`<br>`  claim_count = number of claims`<br>`  total_claimed = sum of claim_amount`<br>`  total_approved = sum of approved_amount`<br>`  latest_incident_date = latest incident_date`<br>`→ one row per policy_id` | Stops a policy's premium being counted once per claim (join fan-out) |
+| BR3 | Cancelled policies are excluded | `FOR EACH policy:`<br>`  IF policy.status IN ('Active','Renewed','Expired') THEN keep`<br>`  ELSE skip  -- i.e. 'Cancelled'` | Cancelled policies and their claims are left out |
+| BR4 | Owners with a credit score below 600 are excluded | `FOR EACH owner:`<br>`  IF owner.credit_score >= 600 THEN keep`<br>`  ELSE skip owner and all their policies` | Low-score owners are left out |
+| BR5 | Only rows with at least one claim are kept | `FOR EACH (owner_id, policy_type) group:`<br>`  IF claim_count > 0 THEN output row`<br>`  ELSE drop row` | Owner + policy type groups with no (non-denied) claims are left out |
+| BR6 | Policies with no claims still contribute premium | `FOR EACH kept policy:`<br>`  look up its claim totals (BR2)`<br>`  IF none found THEN keep policy with empty claim totals`<br>`  -- policy is never dropped for having no claims` | Inside a kept group, a claim-free policy still adds to `policy_count` and `total_annual_premium` |
+| BR7 | Missing claim values count as 0 | `IF claim_count / total_claimed / total_approved IS empty`<br>`  THEN use 0` | Totals are never NULL |
+| BR8 | Approval rate avoids dividing by zero | `IF total_claimed = 0 THEN approval_rate_pct = NULL`<br>`ELSE approval_rate_pct = total_approved / total_claimed * 100` | `approval_rate_pct` is NULL rather than an error when nothing was claimed |
+| BR9 | Money and percentage columns are rounded | `total_annual_premium, total_claimed, total_approved = round(value, 2)`<br>`approval_rate_pct = round(value, 1)` | 2 decimals for USD, 1 decimal for % |
+| BR10 | Sort order | `SORT output rows BY total_claimed, highest first` | Highest claimed amount first |
 
 ### Output columns
 
