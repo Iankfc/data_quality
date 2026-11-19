@@ -66,3 +66,4 @@ For a cleaned-up, reusable version of the test-plan prompts, see [prompt_sequenc
 | 30 | create a separate markdown file which will contain the sequence of instruction on how to prompt an llm to produce the policy_clains_summary.md. | `test_plan/prompt_sequence.md` |
 | 31 | convert policy_claims_summary.md as pdf | `test_plan/policy_claims_summary.pdf` |
 | 32 | create a separate sheet for llm prompt, list down all the prompt I typed in | This file |
+| 33 | add a section for test plan and detail exactly what are the data qa test need like regression, or ddl validation etc aside from test case scenarios | Section 8, types of data QA testing |

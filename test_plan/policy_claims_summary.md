@@ -934,3 +934,348 @@ Several new-data scenarios use the same setup: **one owner with two policies of 
 | CC-11, PC-09, OID-08 | Empty statuses and credit scores silently remove claims, policies or owners | Business to decide the intended handling |
 | TC-09, TA-08 | Top-ranked row (`OWN1005` DP-3) depends on the questionable claim `CLM90015` | Claims team to confirm the claim; re-run the scenarios afterwards |
 
+
+---
+
+## 8. Test plan: types of data QA testing
+
+Section 7 tests the model logic one column at a time. This section covers the **other types of testing** the model needs before it can be released and every time it changes:
+- **What each one checks:** a description of the test type.
+- **How to run it:** steps for this model, using DuckDB SQL where that helps.
+- **Pass criteria:** the result each check must give.
+- **When it runs:** the trigger for running the test.
+
+All checks were run against the current source data on 2026-11-19. The results are shown under **Current result**.
+
+### 8.1 Overview
+
+| # | Test type | Question it answers | Covered in | When it runs | Failure blocks release? |
+|---|---|---|---|---|---|
+| T1 | Source file validation | Did the source files arrive complete and readable? | 8.3 | Every data load | Yes |
+| T2 | DDL / schema validation | Do column names, order, data types and nullability match the contract? | 8.4 | Every model change and every data load | Yes |
+| T3 | Referential integrity | Does every policy have an owner and every claim a policy? | 8.5 | Every data load | Yes |
+| T4 | Grain and uniqueness | Is there exactly one row per `owner_id` + `policy_type`? | 8.6 | Every run | Yes |
+| T5 | Row count and volume | Is the number of rows what the source data says it should be? | 8.7 | Every run | Yes |
+| T6 | Source-to-target reconciliation | Do the totals in the target match totals calculated independently from the source? | 8.8 | Every run | Yes |
+| T7 | Business rule testing | Does each rule (BR1–BR10) work, including edge cases? | Section 7 | Every model change | Critical and High: yes |
+| T8 | Domain, range and null validation | Are values in the allowed set and range, and are nulls and zeros where expected? | Sections 3 and 4 | Every data load | Critical and High: yes |
+| T9 | Data type and precision | Are types usable downstream and is rounding correct? | 8.9 | Every model change | Yes |
+| T10 | Boundary, negative and edge-case testing | Does the model behave correctly at limits and with bad or empty input? | 8.10 | Every model change | Yes |
+| T11 | Regression testing | Did a change alter anything it was not meant to? | 8.11 | Every model change | Yes, for unexplained differences |
+| T12 | Idempotency and determinism | Does running the model twice give exactly the same result? | 8.12 | Every model change | Yes |
+| T13 | Performance and volume | Does the model still run in acceptable time with much more data? | 8.13 | Before release, then quarterly | No (warning) |
+| T14 | End-to-end / integration | Does the full run (`run_sql.py`, export file) produce a file downstream tools can read? | 8.14 | Before release | Yes |
+| T15 | Security and PII | Does the output expose only the personal data it needs? | 8.15 | Before release | Yes |
+| T16 | User acceptance (UAT) | Does the business agree the numbers are right and useful? | 8.16 | Before first release and after logic changes | Yes |
+
+### 8.2 Setup used by the checks
+
+The SQL checks below use four views. You can create them in one DuckDB session from the project root.
+
+```sql
+CREATE OR REPLACE VIEW owner  AS SELECT * FROM read_csv_auto('source/policy_owner.csv');
+CREATE OR REPLACE VIEW policy AS SELECT * FROM read_csv_auto('source/policy_coverage.csv');
+CREATE OR REPLACE VIEW claims AS SELECT * FROM read_csv_auto('source/policy_claims.csv');
+-- target = the model query (model/policy_claims_summary.sql) without the final ';'
+CREATE OR REPLACE VIEW target AS <model query>;
+```
+
+### 8.3 T1 Source file validation
+
+These checks confirm the inputs before anything else runs. If they fail, the source data is incomplete and every later test result is unreliable.
+
+| Check | How | Pass criteria | Current result |
+|---|---|---|---|
+| Files exist | Check `source/policy_owner.csv`, `source/policy_coverage.csv` and `source/policy_claims.csv` are present | All 3 present | Pass |
+| Files are not empty | `SELECT COUNT(*)` per file | Row count > 0 | 20 / 25 / 35 rows |
+| Header row is as expected | Compare the column names with the data catalog (`data_catalog/*.json`) | Same names, same order, no extra or missing columns | Pass |
+| Every row parses | Read with `read_csv(..., ignore_errors = false)` | No parse errors (wrong number of fields, bad quoting) | Pass |
+| Volume is in the normal range | Compare row counts with the previous load (2.5) | Change within ±20% unless explained | Baseline: 20 / 25 / 35 |
+| No duplicate files or rows | `COUNT(*)` vs `COUNT(DISTINCT *)` per file | Equal | Pass |
+
+### 8.4 T2 DDL / schema validation
+
+DDL validation checks the **structure** of the data rather than the values. For this model it covers two things:
+- **Source contract:** the types DuckDB infers when it reads each CSV must match the data catalog.
+- **Target contract:** the output table must have the agreed column names, order, data types and nullability.
+
+A change in structure breaks downstream reports and loads even when every value is correct.
+
+**How to run (target):**
+
+```sql
+SELECT column_name, column_type FROM (DESCRIBE target);
+```
+
+Compare the result with the expected contract below:
+
+| # | Column | Expected type | Null allowed? | Actual type | Result |
+|---|---|---|---|---|---|
+| 1 | `owner_id` | VARCHAR | No | VARCHAR | Pass |
+| 2 | `owner_name` | VARCHAR | Yes (ON-02) | VARCHAR | Pass |
+| 3 | `owner_state` | VARCHAR | No | VARCHAR | Pass |
+| 4 | `policy_type` | VARCHAR | No | VARCHAR | Pass |
+| 5 | `policy_count` | BIGINT | No | BIGINT | Pass |
+| 6 | `total_annual_premium` | DOUBLE | No | DOUBLE | Pass |
+| 7 | `claim_count` | BIGINT | No | HUGEINT | **Fail** (CC-09) |
+| 8 | `total_claimed` | DOUBLE | No | DOUBLE | Pass |
+| 9 | `total_approved` | DOUBLE | No (BR7) | DOUBLE | Pass |
+| 10 | `latest_incident_date` | DATE | No | DATE | Pass |
+| 11 | `approval_rate_pct` | DOUBLE | Yes (BR8) | DOUBLE | Pass |
+
+**Target checks:**
+
+| Check | Pass criteria |
+|---|---|
+| Column names | Exactly the 11 names above, lower case, no spaces |
+| Column order | Same order as above (downstream CSV loads can depend on position) |
+| Data types | Match the expected type |
+| Nullability | Columns marked "No" have 0 nulls (see 4.2) |
+| No extra or missing columns | Exactly 11 columns |
+
+**Source checks:**
+
+| Check | How | Pass criteria | Current result |
+|---|---|---|---|
+| Inferred types match the catalog | `DESCRIBE SELECT * FROM read_csv_auto('source/<file>.csv')` vs `data_type` in `data_catalog/<file>.json` | Same type for every column | **Mismatch:** `zip_code` is read as BIGINT, catalog says VARCHAR |
+| Date columns are read as DATE | Same `DESCRIBE` | `date_of_birth`, `customer_since`, `start_date`, `end_date`, `incident_date`, `reported_date`, `closed_date` are DATE | Pass |
+| Money columns are numeric | Same `DESCRIBE` | `annual_premium`, `claim_amount`, `approved_amount` are DOUBLE or DECIMAL | Pass |
+
+**Finding, `zip_code`:** none of the current zip codes start with 0, so nothing is lost today. A zip code such as `02134` would be read as the number `2134`, though. `zip_code` is not used by the model, so the target is not affected. Even so, reading the sources with explicit types (`read_csv(..., types = {...})`) instead of `read_csv_auto` stops type inference from changing when the data changes.
+
+### 8.5 T3 Referential integrity
+
+This test checks that the join keys connect. An orphan record is silently dropped by the INNER JOIN (a policy without an owner) or by the LEFT JOIN (a claim without a policy), and its money disappears from the totals.
+
+```sql
+-- policies whose owner does not exist
+SELECT COUNT(*) FROM policy ANTI JOIN owner USING (owner_id);
+-- claims whose policy does not exist
+SELECT COUNT(*) FROM claims ANTI JOIN policy USING (policy_id);
+```
+
+| Check | Pass criteria | Current result |
+|---|---|---|
+| Every `policy_coverage.owner_id` exists in `policy_owner` | 0 orphans | 0 |
+| Every `policy_claims.policy_id` exists in `policy_coverage` | 0 orphans | 0 |
+| Primary keys are unique (`owner_id`, `policy_id`, `claim_id`) | 0 duplicates | 0 |
+| Primary keys are not null | 0 nulls | 0 |
+
+Related scenarios: OID-09, OID-10.
+
+### 8.6 T4 Grain and uniqueness
+
+The grain is one row per `owner_id` + `policy_type`. If there are duplicates, every total is counted twice somewhere.
+
+```sql
+SELECT owner_id, policy_type, COUNT(*) AS n
+FROM target GROUP BY ALL HAVING n > 1;
+```
+
+| Check | Pass criteria | Current result |
+|---|---|---|
+| No duplicate `owner_id` + `policy_type` | 0 rows returned | 0 |
+| Key columns not null | 0 nulls in `owner_id`, `policy_type` | 0 |
+| An owner with two policy types appears on two rows | Checked with new test data | See OID-05 |
+
+### 8.7 T5 Row count and volume
+
+This test predicts the row count independently from the source and compares it with the target. A different count means rows were wrongly kept or dropped by BR1, BR3, BR4 or BR5.
+
+```sql
+SELECT COUNT(DISTINCT (o.owner_id, p.policy_type))
+FROM claims c
+JOIN policy p USING (policy_id)
+JOIN owner  o USING (owner_id)
+WHERE c.claim_status <> 'Denied'
+  AND p.status <> 'Cancelled'
+  AND o.credit_score >= 600;
+-- compare with: SELECT COUNT(*) FROM target;
+```
+
+| Check | Pass criteria | Current result |
+|---|---|---|
+| Target rows = expected rows from source | Equal | 11 = 11 |
+| Target is not empty | > 0 rows | 11 |
+| Change since the previous run | Within ±20% unless the source changed by a similar amount | Baseline: 11 |
+
+### 8.8 T6 Source-to-target reconciliation
+
+Reconciliation compares **control totals** calculated directly from the source, with the same filters but without the model's joins and grouping, against the totals in the target. This is the main check that no money is lost or counted twice.
+
+```sql
+WITH kept_claims AS (
+    SELECT c.*
+    FROM claims c
+    JOIN policy p USING (policy_id)
+    JOIN owner  o USING (owner_id)
+    WHERE c.claim_status <> 'Denied'
+      AND p.status <> 'Cancelled'
+      AND o.credit_score >= 600
+)
+SELECT 'source' AS side, COUNT(*) AS claims,
+       ROUND(SUM(claim_amount), 2) AS claimed, ROUND(SUM(approved_amount), 2) AS approved
+FROM kept_claims
+UNION ALL
+SELECT 'target', SUM(claim_count), ROUND(SUM(total_claimed), 2), ROUND(SUM(total_approved), 2)
+FROM target;
+```
+
+| Control total | Source | Target | Tolerance | Result |
+|---|---|---|---|---|
+| Number of claims | 17 | 17 | Exact | Pass |
+| Total claimed | 471,321.11 | 471,321.11 | ±0.01 per row (rounding) | Pass |
+| Total approved | 237,247.23 | 237,247.23 | ±0.01 per row (rounding) | Pass |
+| Total annual premium | Sum of `annual_premium` for kept policies in groups with at least one claim | 19,847.64 | ±0.01 per row | Pass |
+| Number of policies | Count of kept policies in groups with at least one claim | 11 | Exact | Pass |
+
+Reconciliation is also done **row by row** for the Critical columns (section 5.3). The same totals are recalculated per `owner_id` + `policy_type` and compared with each target row.
+
+### 8.9 T9 Data type and precision
+
+| Check | Pass criteria | Current result |
+|---|---|---|
+| Money columns are rounded to 2 decimals | `total_claimed = ROUND(total_claimed, 2)` on every row (same for `total_approved`, `total_annual_premium`) | Pass |
+| Percentage is rounded to 1 decimal | `approval_rate_pct = ROUND(approval_rate_pct, 1)` | Pass |
+| No floating-point noise after export | Exported CSV shows values like `1234.5`, not `1234.4999999` | Pass |
+| Count columns are whole numbers in a standard integer type | BIGINT | **Fail:** `claim_count` is HUGEINT (CC-09) |
+| Dates have no time part | DATE type, ISO format `YYYY-MM-DD` in exports | Pass |
+
+### 8.10 T10 Boundary, negative and edge-case testing
+
+These tests use **new test files** (see 7.12), never `source/`. They check the model at the edges of each rule and with bad input.
+
+| Area | Case | Expected result |
+|---|---|---|
+| Boundary: credit score | `credit_score` = 599, 600, 601 | 599 excluded; 600 and 601 included (BR4) |
+| Boundary: claim count | Group with exactly 1 non-denied claim; group with only denied claims | First kept, second dropped (BR5) |
+| Boundary: approval rate | `total_claimed` = 0; `total_approved` = `total_claimed` | NULL (BR8); 100.0 |
+| Negative: bad statuses | `'cancelled'`, `' Denied '`, empty status | Documented behaviour (CC-10, CC-11, PC-08, PC-09); raised as open issues |
+| Negative: orphans | Claim with unknown `policy_id`; policy with unknown `owner_id` | Excluded and reported by T3 |
+| Negative: negative amounts | `claim_amount` < 0 | Caught by range validation (3.1.2) before the model runs |
+| Empty input | `policy_claims.csv` with header only | Model runs without error and returns 0 rows |
+| Empty input | `policy_owner.csv` with header only | Model runs without error and returns 0 rows |
+| Large values | `claim_amount` = 10,000,000 | Totals correct, no overflow, rounding still 2 decimals |
+
+### 8.11 T11 Regression testing
+
+Regression testing proves that a change to the model (or to `run_sql.py`) changed **only what it was meant to change**. The output before the change is saved as a baseline and compared with the output after the change.
+
+**Steps:**
+
+1. Before changing anything, save the current output as the baseline:
+   `.venv/bin/python run_sql.py model/policy_claims_summary.sql --out tests/baseline/policy_claims_summary.parquet`
+2. Make the change and run the model again into `tests/current/policy_claims_summary.parquet`.
+3. Compare the two outputs row by row:
+
+```sql
+SELECT 'only in baseline' AS diff, * FROM (
+    SELECT * FROM 'tests/baseline/policy_claims_summary.parquet'
+    EXCEPT
+    SELECT * FROM 'tests/current/policy_claims_summary.parquet')
+UNION ALL
+SELECT 'only in current', * FROM (
+    SELECT * FROM 'tests/current/policy_claims_summary.parquet'
+    EXCEPT
+    SELECT * FROM 'tests/baseline/policy_claims_summary.parquet');
+```
+
+4. Compare the schema (T2) and the control totals (T6) of both outputs.
+5. Re-run all section 7 scenarios. They are the regression suite for the business rules.
+
+**Pass criteria:**
+- Every difference found is explained by the change request.
+- Expected differences are written down **before** the change. For example, the CC-09 fix should change only the type of `claim_count` (HUGEINT to BIGINT) and no values.
+- Unexplained differences fail the test.
+
+**Current baseline (2026-11-19):**
+
+| Measure | Value |
+|---|---|
+| Rows | 11 |
+| Sum of `policy_count` | 11 |
+| Sum of `claim_count` | 17 |
+| Sum of `total_annual_premium` | 19,847.64 |
+| Sum of `total_claimed` | 471,321.11 |
+| Sum of `total_approved` | 237,247.23 |
+| Top row | `OWN1005`, DP-3 |
+
+**When to refresh the baseline:** only after a change has passed and been accepted, and whenever the source data is deliberately replaced.
+
+### 8.12 T12 Idempotency and determinism
+
+| Check | How | Pass criteria | Current result |
+|---|---|---|---|
+| Same input gives the same output | Run the model twice and compare with `EXCEPT ALL` both ways | 0 differences | Pass |
+| Row order is stable | Look for ties in the sort column: `SELECT total_claimed, COUNT(*) FROM target GROUP BY 1 HAVING COUNT(*) > 1` | No ties, or a tie-breaker in `ORDER BY` | Pass (no ties today). Recommend adding `owner_id, policy_type` to the `ORDER BY` so ties cannot change the order |
+| No dependence on run date or environment | Search the model for `current_date`, `now()` and random functions | None used | Pass |
+| Re-running does not append | When writing to a database (`--db`), run twice and count rows | Same row count both times | To test when a persistent table is used |
+
+### 8.13 T13 Performance and volume
+
+The current data is tiny (80 source rows), so performance must be tested on a scaled-up copy.
+
+| Check | How | Pass criteria |
+|---|---|---|
+| Runtime at current volume | `run_sql.py` prints the time per statement | Record as the baseline |
+| Runtime at 1,000× volume | Generate about 20,000 owners, 25,000 policies and 35,000 claims in a test folder and run the model | Within the agreed limit (to agree with the business, for example under 10 seconds) |
+| Memory | Watch peak memory at 1,000× volume | Runs without out-of-memory errors |
+| Scaling | Compare runtime at 10×, 100× and 1,000× | Roughly linear growth, with no sudden jumps (a jump would suggest join fan-out) |
+
+### 8.14 T14 End-to-end / integration
+
+| Check | How | Pass criteria |
+|---|---|---|
+| Runs from the command line | `.venv/bin/python run_sql.py model/policy_claims_summary.sql` | Exit code 0, 11 rows shown |
+| Runs from VS Code | Ctrl+Shift+B task and F5 debug configuration | Same output as the command line |
+| CSV export | `--out output/policy_claims_summary.csv` | File has a header row and 11 data rows, ISO dates, `.` as decimal separator |
+| Parquet export | `--out output/policy_claims_summary.parquet` | File opens in DuckDB with the same schema as T2 |
+| Downstream read | Open the export in the tool that will use it (for example Excel or a BI tool) | All 11 columns load with the right types. `claim_count` is the known risk (CC-09) |
+| Error handling | Rename a source file and run | Clear DuckDB error message, exit code 1, no partial output file |
+
+### 8.15 T15 Security and PII
+
+| Check | Pass criteria |
+|---|---|
+| Only the personal data needed is in the output | `owner_name` is the only personal field. No email, phone, address, date of birth or credit score |
+| Credit score is used but not shown | `credit_score` filters rows (BR4) but is not an output column |
+| Export location | Output files are written only to agreed folders, not shared folders |
+| Test data | New test files use made-up names and `@example.com` emails, never real customer data |
+
+### 8.16 T16 User acceptance (UAT)
+
+| Step | Who | Pass criteria |
+|---|---|---|
+| Walk through 3–5 rows against the claims system | Claims / underwriting analyst | Numbers match what they see in the source system |
+| Confirm the business rules BR1–BR10 | Business owner | Each rule is the intended behaviour |
+| Decide the open issues (7.12 defects table) | Business owner | Decision recorded for case-sensitivity, empty statuses, missing names and `CLM90015` |
+| Sign off | Business owner and QA | Written approval to release |
+
+### 8.17 Test cycle: what runs when
+
+| Trigger | Tests to run |
+|---|---|
+| New source data load | T1, T2 (source), T3, T8, then T4, T5, T6 on the output |
+| Change to the model SQL | All of T2–T12 and T14; section 7 scenarios (T7); T11 against the saved baseline |
+| Change to `run_sql.py` only | T11, T12, T14 |
+| Before first release | Everything, T1–T16 |
+| Quarterly | T13; review the baselines and thresholds |
+
+### 8.18 Entry and exit criteria
+
+**Entry (testing can start when):**
+- The model SQL is complete and runs without errors.
+- The source files are present and pass T1.
+- The data catalog is up to date for all source columns.
+- The new test files for section 7 and 8.10 are built.
+
+**Exit (the model can be released when):**
+- All blocking tests (T1–T12, T14–T16) pass, or each failure has an agreed decision.
+- No open Critical or High failure from section 7.
+- The regression comparison shows no unexplained differences.
+- The baseline (8.11) is saved for the next change.
+- UAT sign-off is recorded.
+
+**Current status:** not ready for release. Two items are open:
+- **T2 / T9:** `claim_count` is HUGEINT (CC-09). The fix is to cast it to BIGINT in the model.
+- **T16:** the business has not yet decided the open issues in 7.12.
