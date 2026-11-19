@@ -623,6 +623,51 @@ Null and zero profile of every column in the model output table `policy_claims_s
 | `approval_rate_pct` | 2 zeros (18.2%) | Yes. Same 2 rows: 0 approved ÷ amount claimed = 0% |
 | All other columns | No nulls, no zeros | Yes. `claim_count` ≥ 1 for every row (BR5), so `latest_incident_date` (BR14) and `approval_rate_pct` (BR8) are never null |
 
+### 4.3 Target column nullability
+
+Whether each output column can be null, and whether a null would be acceptable. The two are different questions:
+
+- **Nullable (model logic)**: whether the SQL in [`model/policy_claims_summary.sql`](../model/policy_claims_summary.sql) can output a null. The model has no `NOT NULL` checks, so a column is nullable if a null in a source column can reach it. Columns built with `COUNT` or `COALESCE` can never be null.
+- **Should be null?**: whether a null is a valid business value. If a column is nullable but a null makes no business sense, a null in the output means a defect in the source data, and the test must flag it.
+
+All source columns the model reads are marked `nullable: false` in the data catalog, so with valid source data only `approval_rate_pct` can be null.
+
+| column_name | Nullable (model logic) | Should be null? | Rationale |
+|---|---|---|---|
+| `owner_id` | No | No | Part of the grain (BR11). It is the join key to `policy_coverage`, and a null key never matches in the `INNER JOIN`, so a null cannot reach the output. Every row must say which owner it belongs to |
+| `owner_name` | Yes | No | Built with `first_name \|\| ' ' \|\| last_name`, and `\|\|` returns null if either part is null (BR12). Reviewers need the name to identify the owner, and both parts are required in the catalog, so a null means the source owner record is incomplete |
+| `owner_state` | Yes | No | Copied directly from `policy_owner.state` (BR13), so a null in the source is passed through. Loss analysis by state needs it, and every owner has a mailing address, so a null means the source record is incomplete |
+| `policy_type` | Yes | No | Copied unchanged and part of the grain (BR11). A null source value would group those policies into a `NULL` policy type row. Every policy has a form (HO-3, DP-3, ...), so a null is a source data defect |
+| `policy_count` | No | No | `COUNT` returns a number, never null. Because of the `INNER JOIN`, every row has at least one policy, so the value is ≥ 1 |
+| `total_annual_premium` | Yes | No | `SUM` skips nulls and is null only when every policy in the group has no `annual_premium`. Every policy in force has a premium, and the premium is needed to compare claims with premium, so a null is a source data defect |
+| `claim_count` | No | No | Wrapped in `COALESCE(..., 0)` (BR7), so it is never null. `HAVING claim_count > 0` (BR5) also means the value is always ≥ 1 |
+| `total_claimed` | No | No | Wrapped in `COALESCE(..., 0)` (BR7), so it is never null. A null claimed amount on a claim would be counted as 0, which hides the problem. Domain validation of `policy_claims.claim_amount` (3.1) catches that case |
+| `total_approved` | No | No | Wrapped in `COALESCE(..., 0)` (BR7). 0 is a valid value when the only kept claims are Under Review (see 4.2), so "nothing approved yet" is shown as 0, not null |
+| `latest_incident_date` | Yes | No | `MAX` is not wrapped in `COALESCE`. Every row has at least one non-denied claim (BR5), and every claim has an incident date, so the only way to get a null is a claim with no `incident_date` in the source. That is a source data defect |
+| `approval_rate_pct` | Yes | Yes, only when `total_claimed` = 0 | `NULLIF(..., 0)` returns null when nothing was claimed (BR8). The rate is undefined in that case, and null is more correct than 0% or a divide-by-zero error. A null with `total_claimed` > 0 is a defect. Note that `total_claimed` = 0 with `claim_count` ≥ 1 means every kept claim has a 0 amount, which is itself worth investigating |
+
+**Validation logic (pseudo code):**
+```
+FOR EACH column IN the table above:
+    IF "Should be null?" = No:
+        report FAIL for every row where column IS NULL
+    IF column = approval_rate_pct:
+        report FAIL for every row where approval_rate_pct IS NULL AND total_claimed <> 0
+        report FAIL for every row where approval_rate_pct IS NOT NULL AND total_claimed = 0
+```
+
+**Example check (DuckDB):** should return 0 rows.
+```sql
+SELECT owner_id, policy_type
+FROM policy_claims_summary
+WHERE owner_id IS NULL OR owner_name IS NULL OR owner_state IS NULL
+   OR policy_type IS NULL OR policy_count IS NULL OR total_annual_premium IS NULL
+   OR claim_count IS NULL OR total_claimed IS NULL OR total_approved IS NULL
+   OR latest_incident_date IS NULL
+   OR (approval_rate_pct IS NULL AND total_claimed <> 0)
+   OR (approval_rate_pct IS NOT NULL AND total_claimed = 0);
+```
+
 ---
 
 ## 5. Strategy
