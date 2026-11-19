@@ -71,3 +71,4 @@ For a cleaned-up, reusable version of the test-plan prompts, see [prompt_sequenc
 | 35 | just one target column per business rule | Business rules table reduced to one target column per rule |
 | 36 | add business rule for other column if needed | BR11–BR15 added for `policy_type`, `owner_name`, `owner_state`, `latest_incident_date`, `total_approved` |
 | 37 | update the whole policy claims summary file given the new information in the business requirement | BR11–BR15 carried through sections 1–8; business rule coverage table added to 7.12 |
+| 38 | in the test scenario, under why it matters, add a second paragram in less than 3 sentense what is the negative effect or problem that can happen if the test scenario failed | "If it fails" paragraph added to "Why it matters" for all 84 scenarios |
