@@ -67,3 +67,7 @@ For a cleaned-up, reusable version of the test-plan prompts, see [prompt_sequenc
 | 31 | convert policy_claims_summary.md as pdf | `test_plan/policy_claims_summary.pdf` |
 | 32 | create a separate sheet for llm prompt, list down all the prompt I typed in | This file |
 | 33 | add a section for test plan and detail exactly what are the data qa test need like regression, or ddl validation etc aside from test case scenarios | Section 8, types of data QA testing |
+| 34 | update the business to add target column at which the business rule should be applied to | "Target column(s)" column added to the business rules table |
+| 35 | just one target column per business rule | Business rules table reduced to one target column per rule |
+| 36 | add business rule for other column if needed | BR11–BR15 added for `policy_type`, `owner_name`, `owner_state`, `latest_incident_date`, `total_approved` |
+| 37 | update the whole policy claims summary file given the new information in the business requirement | BR11–BR15 carried through sections 1–8; business rule coverage table added to 7.12 |

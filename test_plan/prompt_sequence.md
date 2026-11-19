@@ -66,11 +66,16 @@ Section 1 "Purpose of the model table":
 - What business questions the table answers and who uses it.
 - "Grain" subsection: what one row represents, with an example.
 - "Business rules applied" subsection: a table with columns # (BR1, BR2, ...), Rule,
-  Derivation logic (pseudo code), Effect. Cover every filter, join, aggregation, NULL handling,
-  divide-by-zero handling, rounding and sort order in the SQL. Write the derivation logic as
+  Target column, Derivation logic (pseudo code), Effect. Cover every filter, join, aggregation,
+  NULL handling, divide-by-zero handling, rounding and sort order in the SQL. Give each rule
+  exactly one target column (the column it mainly controls), and make sure every output column
+  is the target of at least one rule, adding rules for pass-through and simple derivations
+  (grain, renamed or concatenated columns, MAX/SUM) where needed. Write the derivation logic as
   plain FOR EACH / IF / THEN / ELSE pseudo code, not SQL, using <br> for line breaks inside the cell.
-- "Output columns" subsection: column, type, description, source column or derivation.
-- "Lineage" subsection: a text diagram from the source tables to the output, showing joins and filters.
+- "Output columns" subsection: column, type, description, source column or derivation, and
+  every business rule that affects the column.
+- "Lineage" subsection: a text diagram from the source tables to the output, showing joins and
+  filters, labelled with their BR numbers.
 
 Section 2 "Source tables": one subsection per source table with
 - a summary table: file (link), catalog (link), description, grain, row count, primary key,
@@ -83,7 +88,7 @@ owners with credit_score < 600, date ranges and the model's row count. End it wi
 ```
 
 **Check:**
-- Business rules BR1–BR10 are there, and the pseudo code matches the SQL.
+- Business rules BR1–BR15 are there, and the pseudo code matches the SQL.
 - The derivation for `claim_count`, `total_claimed` and the others mentions that claims are totalled **per policy before the join**, to avoid double-counting premium.
 - Section 2.5 says there are **no Active policies** and **no owners with a credit score below 600**.
 
