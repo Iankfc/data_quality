@@ -22,3 +22,7 @@ id only 2 columns change all the rest of the colums still has to be checked
 Test the source number data type decrease between source and target
 
 Create a test that details what are the steps that need to be done to execute the test scenarios
+
+make sure to add version tag in the output to make sure we can version control the output and revert if needed
+
+connect to wiki for more business context

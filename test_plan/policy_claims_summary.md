@@ -668,6 +668,85 @@ WHERE owner_id IS NULL OR owner_name IS NULL OR owner_state IS NULL
    OR (approval_rate_pct IS NOT NULL AND total_claimed = 0);
 ```
 
+### 4.4 Target column zero values
+
+Whether a zero is a valid value for each output column, based on the business rules and the source and target profiles (4.1 and 4.2). Zeros only apply to numeric columns. Text and date columns are listed as N/A so that every output column is covered. **Has zero value** is the zero count in the current target data (4.2, as of 2026-11-18).
+
+A zero that makes no business sense is often a hidden null. For example, BR7 turns a missing claim amount into 0. So these checks support the null checks in 4.3.
+
+| column_name | Has zero value | Zero value makes sense? | Rationale |
+|---|---|---|---|
+| `owner_id` | N/A (text) | N/A (text) | Identifier, not a quantity. Covered by the null check (4.3) and the grain check |
+| `owner_name` | N/A (text) | N/A (text) | Text column. Covered by the null check (4.3) |
+| `owner_state` | N/A (text) | N/A (text) | Text column. Covered by domain validation (3.2) and the null check (4.3) |
+| `policy_type` | N/A (text) | N/A (text) | Text column. Covered by domain validation (3.2) and the null check (4.3) |
+| `policy_count` | No (0 of 11 rows) | No | Every row is built from at least one policy (the `INNER JOIN` to `policy_coverage`), so the minimum is 1. Profiling: 0 zeros (4.2). A 0 would mean the grouping or join is broken |
+| `total_annual_premium` | No (0 of 11 rows) | No | Every policy in force pays a premium. Source `annual_premium` has 0 zeros (4.1) and the target has 0 zeros (4.2). A 0 means a premium is missing or was loaded as 0, which would make the claims look very high relative to premium |
+| `claim_count` | No (0 of 11 rows) | No | `HAVING claim_count > 0` (BR5) removes every group without a claim, so a 0 cannot appear unless BR5 is broken. Profiling: 0 zeros (4.2) |
+| `total_claimed` | No (0 of 11 rows) | No | Every row has at least one non-denied claim (BR5), and source `claim_amount` has 0 zeros (4.1), so the sum is always above 0. Profiling: 0 zeros (4.2). A 0 means either a claim was filed for $0 or a missing `claim_amount` was turned into 0 by BR7. Both are source data defects |
+| `total_approved` | **Yes (2 of 11 rows, 18.2%)** | Yes, when the group's only non-denied claims are Under Review | Under Review claims have no approved amount yet: all 9 in the source have `approved_amount` = 0 (4.1: 15 zeros, all Denied or Under Review). Denied claims are removed (BR1), so a group with only Under Review claims left totals 0 (BR15). Profiling: 2 zeros (4.2), `OWN1001` DP-3 and `OWN1014` HO-6, both with one Under Review claim. A 0 for a group with any Approved, Paid or Closed claim is a defect |
+| `latest_incident_date` | N/A (date) | N/A (date) | Date column. Covered by the null check (4.3) and the range check (3.2) |
+| `approval_rate_pct` | **Yes (2 of 11 rows, 18.2%)** | Yes, only when `total_approved` = 0 | 0 approved ÷ amount claimed = 0%, so it is zero on exactly the same rows as `total_approved`. Profiling: 2 zeros (4.2), the same 2 rows. A 0 when `total_approved` > 0 is a defect, unless the approved amount is so small that the rate rounds to 0.0% (below 0.05%, BR9) |
+
+**Validation logic (pseudo code):**
+```
+FOR EACH numeric column where "Zero value makes sense?" = No:
+    report FAIL for every row where column = 0
+FOR EACH row where total_approved = 0:
+    look up the row's non-denied source claims
+    IF any claim has claim_status IN ('Approved', 'Paid', 'Closed'): report FAIL
+    IF approval_rate_pct <> 0: report FAIL
+```
+
+**Example check (DuckDB):** should return 0 rows.
+```sql
+SELECT owner_id, policy_type
+FROM policy_claims_summary
+WHERE policy_count = 0 OR total_annual_premium = 0
+   OR claim_count = 0 OR total_claimed = 0
+   OR (total_approved = 0 AND approval_rate_pct <> 0)
+   OR (total_approved > 0 AND approval_rate_pct = 0
+       AND total_approved / total_claimed * 100 >= 0.05);
+```
+
+### 4.5 Target column negative values
+
+Whether a negative value is valid for each output column, based on the business rules and the source and target data (as of 2026-11-18). Negative values only apply to numeric columns. Text and date columns are listed as N/A so that every output column is covered. **Has negative value** is the count of rows below 0 in the current target data (11 rows).
+
+The model only adds up source values and divides them (BR2, BR8, BR9). It never subtracts. So a negative in the output can only come from a negative in the source: `annual_premium`, `claim_amount` or `approved_amount`. Today none of these source columns has a negative value (min 199.25, 1,947.49 and 0.00). A source system that records refunds, reversals or recoveries as negative rows would break this, because the `SUM` would net them off silently.
+
+| column_name | Has negative value | Negative value makes sense? | Rationale |
+|---|---|---|---|
+| `owner_id` | N/A (text) | N/A (text) | Identifier, not a quantity |
+| `owner_name` | N/A (text) | N/A (text) | Text column |
+| `owner_state` | N/A (text) | N/A (text) | Text column |
+| `policy_type` | N/A (text) | N/A (text) | Text column |
+| `policy_count` | No (min 1) | No | It is a `COUNT` of policies, and a count can never be below 0. The expected range is ≥ 1 (3.2.2). A negative value is impossible from the SQL, so seeing one would mean the column is not built by this model |
+| `total_annual_premium` | No (min 199.25) | No | A premium is what the owner pays for cover, so it is always positive. Source `annual_premium` has no negatives (min 199.25). A negative total would mean a premium refund or credit was loaded as a negative policy premium. That belongs in a separate billing adjustment, not in the policy's annual premium |
+| `claim_count` | No (min 1) | No | A sum of claim counts, each ≥ 1 (BR2), and rows with 0 claims are removed (BR5). The expected range is ≥ 1 (3.2.2). A negative value is impossible from the SQL |
+| `total_claimed` | No (min 3,772.93) | No | A claim asks the insurer for money, so `claim_amount` must be > 0 (3.1.2). Source has no negatives (min 1,947.49). A negative claim (for example a withdrawn claim or a subrogation recovery stored as a negative row) would reduce the total without any sign of it in the output, so it must be caught in the source |
+| `total_approved` | No (min 0.00) | No | The approved amount is what the insurer agrees to pay, from 0 (Denied or Under Review) up to the amount claimed (3.1.2: 0 ≤ `approved_amount` ≤ `claim_amount`). Source has no negatives (min 0.00). A negative value would mean a clawback or overpayment recovery was stored as a claim approval |
+| `latest_incident_date` | N/A (date) | N/A (date) | Date column. Dates far in the past or in the future are covered by the range check (3.2.2) |
+| `approval_rate_pct` | No (min 0.0) | No | It is `total_approved / total_claimed × 100` (BR8). `total_approved` ≥ 0 and `total_claimed` > 0, so the rate is always ≥ 0. The expected range is 0 – 100 (3.2.2). A negative rate can only come from a negative `total_approved` or `total_claimed`, so it points back to a source data defect |
+
+**Validation logic (pseudo code):**
+```
+FOR EACH numeric column IN the table above:
+    report FAIL for every row where column < 0
+IF any row fails:
+    trace it back to the source rows (annual_premium, claim_amount, approved_amount)
+    and find the negative source value
+```
+
+**Example check (DuckDB):** should return 0 rows.
+```sql
+SELECT owner_id, policy_type
+FROM policy_claims_summary
+WHERE policy_count < 0 OR total_annual_premium < 0
+   OR claim_count < 0 OR total_claimed < 0
+   OR total_approved < 0 OR approval_rate_pct < 0;
+```
+
 ---
 
 ## 5. Strategy
