@@ -28,3 +28,6 @@ make sure to add version tag in the output to make sure we can version control t
 connect to wiki for more business context
 
 make sure there is not PII in the output report
+
+Officially let us use the the dbt code the we can create a s2t file vs dbt generated s2t file 
+We send BSA with the official definition of the column name and table description

@@ -11,7 +11,7 @@ Usage:
     python md_to_pdf.py input.md -o output.pdf [--portrait] [--keep-html]
 
 Supported Markdown: ATX headings, paragraphs, bold/italic, inline code,
-links, fenced code blocks, GFM pipe tables (with inline <br>), ordered and
+links, fenced code blocks, GFM pipe tables (with inline <br>), images, ordered and
 unordered lists (nested by indentation), block quotes and horizontal rules.
 """
 
@@ -61,6 +61,13 @@ def render_inline(text: str) -> str:
         label, url = m.group(1), m.group(2)
         return f'<a href="{html.escape(url, quote=True)}">{label}</a>'
 
+    # Images ![alt](src) before links, so the link rule does not consume them.
+    def image(m: re.Match) -> str:
+        alt, src = m.group(1), m.group(2)
+        return stash(f'<img src="{html.escape(src, quote=True)}" alt="{alt}" '
+                     'style="max-width:100%; height:auto; display:block; margin:8px auto;">')
+
+    text = re.sub(r"!\[([^\]]*)\]\(([^)\s]+)\)", image, text)
     text = re.sub(r"\[([^\]]+)\]\(([^)\s]+)\)", link, text)
     # Bold, italic
     text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
@@ -323,6 +330,7 @@ th, td {
   overflow-wrap: break-word;
 }
 th { background: #2b4c7e; color: #ffffff; font-weight: bold; }
+th code { background: rgba(255,255,255,0.15); color: #ffffff; }
 tbody tr:nth-child(even) { background: #f3f6fb; }
 blockquote { margin: 0 0 0.9em; padding: 0 1em; color: #4a4a4a; border-left: 3px solid #c8d3e6; }
 """

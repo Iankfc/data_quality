@@ -72,3 +72,9 @@ For a cleaned-up, reusable version of the test-plan prompts, see [prompt_sequenc
 | 36 | add business rule for other column if needed | BR11–BR15 added for `policy_type`, `owner_name`, `owner_state`, `latest_incident_date`, `total_approved` |
 | 37 | update the whole policy claims summary file given the new information in the business requirement | BR11–BR15 carried through sections 1–8; business rule coverage table added to 7.12 |
 | 38 | in the test scenario, under why it matters, add a second paragram in less than 3 sentense what is the negative effect or problem that can happen if the test scenario failed | "If it fails" paragraph added to "Why it matters" for all 84 scenarios |
+| 39 | provide more suggestion on how to improve creation of test cases that accounts for the impact to the business and other columns | Suggestions only (no file change) |
+| 40 | any other statistical measures or machine learning models that can be applied into the data of the target table that can help to determine relations and importance of each data from one another | Suggestions only (no file change) |
+| 41 | how about hierarchycal clustering | Explanation with a trial run (no file change) |
+| 42 | yes | Section 9 (hierarchical clustering), `analysis/cluster_target.py`, dendrogram images; image support added to `md_to_pdf.py` |
+| 43 | update the test case scenario based on the whole policy_claims_summary.md | 10 new scenarios (94 total); 7.12 summary, coverage and defects updated; empty-file defect found and added to 8.10 and 8.18 |
+| 44 | Create a table with the list of target column names, another columns list down the other target columns rank by importance and business impact if the values are wrong relative the the first column, then another column explaining the rational about the ranking | Section 5.5, impact of a wrong column on the other columns |

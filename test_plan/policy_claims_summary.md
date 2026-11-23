@@ -803,6 +803,39 @@ Each column is scored from 1 (low) to 3 (high) on three factors. The three score
 4. **Calculated columns:** check `approval_rate_pct` against the money columns (BR8, BR9), and the sort order (BR10).
 5. **Everything else:** check BR12–BR14, then run domain validation and profiling on the remaining Medium and Low columns.
 
+### 5.5 Impact of a wrong column on the other columns
+
+Section 5.2 ranks each column on its own. This table looks at how an error **spreads**. For each target column (first column), the other 10 target columns are ranked by how much business harm they cause **when the first column's values are wrong**. Rank 1 is the column whose effect is most harmful.
+
+The ranking combines two things:
+- **How the column is affected**, shown in brackets after each column:
+  - **calculated:** calculated directly from the first column, so it is wrong whenever the first column is wrong.
+  - **row:** the error adds, removes, merges or misassigns whole rows, so this column is wrong for those rows.
+  - **shared input:** built from the same source records or business rules, so whatever caused the error is likely to make this column wrong too.
+  - **read together:** the value itself is correct, but it is used with the first column in a business decision (for example claims against premium), so the decision is wrong.
+  - **not affected:** no link. These are listed last, in their section 5.2 order.
+- **How much harm a wrong value does**, using the business impact scores in 5.2. Money columns used for pricing, renewal and finance decisions rank above counts, dates and display columns.
+
+| Target column (wrong values) | Other target columns, ranked by impact | Rationale for the ranking |
+|---|---|---|
+| `owner_id` | 1. `total_claimed` (row)<br>2. `total_approved` (row)<br>3. `claim_count` (row)<br>4. `total_annual_premium` (row)<br>5. `approval_rate_pct` (row)<br>6. `owner_name` (calculated)<br>7. `owner_state` (calculated)<br>8. `policy_type` (row)<br>9. `latest_incident_date` (row)<br>10. `policy_count` (row) | `owner_id` is the join key and half of the grain (BR4, BR11), so a wrong value attaches a group's figures to the wrong owner, or merges or splits owners. **Every** column on the row is wrong, so the ranking is by business harm only. The money columns come first because renewal, pricing and finance decisions would be made about the wrong customer. `owner_name` is next: claims would be shown under another person's name, which is a privacy breach (8.15). `owner_state` puts the figures in the wrong region. The remaining columns are wrong but have the lowest business impact |
+| `policy_type` | 1. `total_claimed` (row)<br>2. `owner_id` (row)<br>3. `total_approved` (row)<br>4. `claim_count` (row)<br>5. `total_annual_premium` (row)<br>6. `approval_rate_pct` (row)<br>7. `policy_count` (row)<br>8. `latest_incident_date` (row)<br>9. `owner_state` (not affected)<br>10. `owner_name` (not affected) | `policy_type` is the other half of the grain (BR11). A wrong value moves policies into another group, so **two** rows are wrong: the group that lost the policies and the group that gained them. Rows can also appear or disappear, which breaks the `owner_id` + `policy_type` key (rank 2). Product-level pricing and loss analysis use these figures (PT-07). The owner's state and name do not change, because the owner is the same |
+| `total_claimed` | 1. `approval_rate_pct` (calculated)<br>2. `total_approved` (shared input)<br>3. `claim_count` (shared input)<br>4. `owner_id` (read together)<br>5. `total_annual_premium` (read together)<br>6. `latest_incident_date` (shared input)<br>7. `policy_count` (shared input)<br>8. `policy_type` (not affected)<br>9. `owner_state` (not affected)<br>10. `owner_name` (not affected) | `approval_rate_pct` divides by `total_claimed` (BR8), so it is always wrong too. `total_approved` and `claim_count` come from the same non-denied claims (BR1, BR2, BR15) and sit in the same clustering group (9.2), so the cause of the error usually affects them as well. `owner_id` is next because the table is sorted by `total_claimed` (BR10): the wrong owners are flagged as the highest risk. Premium is correct, but the claims-to-premium comparison is wrong. The date and policy count are wrong only if a filter (BR1, BR3) caused the error. Type, state and name are correct, but subtotals by type and state are wrong (PT-07, OS-06) |
+| `total_approved` | 1. `approval_rate_pct` (calculated)<br>2. `total_claimed` (shared input)<br>3. `claim_count` (shared input)<br>4. `total_annual_premium` (read together)<br>5. `latest_incident_date` (shared input)<br>6. `owner_id` (not affected)<br>7. `policy_type` (not affected)<br>8. `policy_count` (not affected)<br>9. `owner_state` (not affected)<br>10. `owner_name` (not affected) | `approval_rate_pct` uses `total_approved` as its numerator (BR8), so it is always wrong too. `total_claimed` and `claim_count` share the same claim records and the denied-claim filter (BR1, BR15); the strongest correlation in the table is between claimed and approved (9.2). Premium is read with approved amounts to judge paid losses against income, which is used for finance reserves. The date is affected only if the claim filter is the cause (claim stage, AR-09). The grain and descriptive columns do not depend on approved amounts |
+| `claim_count` | 1. `total_claimed` (shared input)<br>2. `total_approved` (shared input)<br>3. `approval_rate_pct` (shared input)<br>4. `owner_id` (row)<br>5. `total_annual_premium` (row)<br>6. `latest_incident_date` (shared input)<br>7. `policy_type` (row)<br>8. `policy_count` (row)<br>9. `owner_state` (row)<br>10. `owner_name` (row) | `claim_count` is built from the same non-denied claims as the money columns and the date (BR1, BR2, BR14), so a wrong count usually means those are wrong too; the money columns rank first because of their business impact. `claim_count` also decides whether a row exists at all (BR5). When a wrong count moves between 0 and 1 or more, a whole row is added or removed, so every other column is affected for that row. `owner_id` ranks highest of these because an owner wrongly appears in, or disappears from, a claims review |
+| `total_annual_premium` | 1. `total_claimed` (read together)<br>2. `total_approved` (read together)<br>3. `policy_count` (shared input)<br>4. `claim_count` (read together)<br>5. `owner_id` (not affected)<br>6. `policy_type` (not affected)<br>7. `approval_rate_pct` (not affected)<br>8. `latest_incident_date` (not affected)<br>9. `owner_state` (not affected)<br>10. `owner_name` (not affected) | No other column is calculated from premium, and clustering shows it is the most independent column (9.2). The harm comes from **reading** it with the claims columns: a wrong premium makes the claims-to-premium ratio wrong, so `total_claimed` and `total_approved` lead to wrong pricing, renewal and profitability decisions. `policy_count` uses the same policy rows, and the most likely premium error (counted once per claim, BR2) makes the policy count rise too (PC-02, TAP-09). The claim count is read with premium to judge claim frequency. Other columns are not linked |
+| `approval_rate_pct` | 1. `total_approved` (shared input)<br>2. `total_claimed` (shared input)<br>3. `latest_incident_date` (read together)<br>4. `claim_count` (read together)<br>5. `owner_id` (not affected)<br>6. `policy_type` (not affected)<br>7. `total_annual_premium` (not affected)<br>8. `policy_count` (not affected)<br>9. `owner_state` (not affected)<br>10. `owner_name` (not affected) | Nothing is calculated from the rate. A wrong rate usually means one of its inputs is wrong, so `total_approved` (numerator) and `total_claimed` (denominator) are checked first (AR-01, AR-08). The incident date is read with the rate to judge claim stage: a low rate on recent claims is expected (9.2, AR-09). The claim count shows how many claims the rate is based on. Other columns are not linked |
+| `latest_incident_date` | 1. `total_claimed` (shared input)<br>2. `total_approved` (shared input)<br>3. `claim_count` (shared input)<br>4. `approval_rate_pct` (read together)<br>5. `owner_id` (not affected)<br>6. `policy_type` (not affected)<br>7. `total_annual_premium` (not affected)<br>8. `policy_count` (not affected)<br>9. `owner_state` (not affected)<br>10. `owner_name` (not affected) | Nothing is calculated from the date. The most likely cause of a wrong date is the claim filter (BR1) or the per-policy totals (BR2, BR14). Both would also make the claim totals and count wrong, which have much higher business impact. The approval rate is read with the date to judge claim stage (9.2). Other columns are not linked |
+| `policy_count` | 1. `total_annual_premium` (shared input)<br>2. `total_claimed` (shared input)<br>3. `total_approved` (shared input)<br>4. `claim_count` (shared input)<br>5. `policy_type` (shared input)<br>6. `approval_rate_pct` (shared input)<br>7. `latest_incident_date` (shared input)<br>8. `owner_id` (not affected)<br>9. `owner_state` (not affected)<br>10. `owner_name` (not affected) | Nothing is calculated from the policy count, but a wrong count is a symptom. A count that rises with the number of claims means premium is counted once per claim (BR2, PC-02), so premium ranks first. A count that includes a cancelled policy (BR3) or misses a claim-free one (BR6) also brings that policy's claims or premium in or out. A wrong count of same-type policies points to a grain problem (BR11). The owner's details are not linked |
+| `owner_state` | 1. `total_claimed` (read together)<br>2. `total_approved` (read together)<br>3. `total_annual_premium` (read together)<br>4. `claim_count` (read together)<br>5. `approval_rate_pct` (read together)<br>6. `owner_id` (shared input)<br>7. `owner_name` (shared input)<br>8. `policy_type` (not affected)<br>9. `latest_incident_date` (not affected)<br>10. `policy_count` (not affected) | No value on the row depends on the state, but every money column is grouped by it in regional reports. A wrong state moves the row's figures into the wrong state's subtotals (OS-06), so the money columns rank first, by business impact. If the state is wrong because the row was joined to the wrong owner, `owner_id` and `owner_name` are wrong too. If the property state was used instead of the mailing state (BR13), only the state is wrong |
+| `owner_name` | 1. `owner_id` (shared input)<br>2. `owner_state` (shared input)<br>3. `total_claimed` (not affected)<br>4. `policy_type` (not affected)<br>5. `total_approved` (not affected)<br>6. `claim_count` (not affected)<br>7. `total_annual_premium` (not affected)<br>8. `approval_rate_pct` (not affected)<br>9. `latest_incident_date` (not affected)<br>10. `policy_count` (not affected) | The name is display only (BR12), and nothing is calculated from it. A wrong name usually means it was looked up from the wrong owner record, so `owner_id` and `owner_state` are checked first; if they are wrong, the whole row is misassigned (see the `owner_id` row). If only the format is wrong (spaces, a missing part), no other column is affected and the remaining columns are listed in their 5.2 order |
+
+**What this means for testing:**
+- **`owner_id`, `policy_type` and `claim_count` spread errors the furthest**, because they decide which rows exist and how policies are grouped. When one of them fails, re-test every column, not just that one.
+- **`total_claimed` and `total_approved` always take `approval_rate_pct` with them.** Fix the totals first, then re-check the rate (AR-01).
+- **`total_annual_premium` errors don't show up in other columns.** Clustering shows premium is independent (9.2), so only its own tests (TAP-01 to TAP-09) and the premium-per-policy check (TAP-09) will catch them.
+- **`approval_rate_pct`, `latest_incident_date`, `policy_count` and `owner_name` are symptoms.** A failure in one of them usually points to a cause in a higher-ranked column, so look there first.
+
 ---
 
 ## 6. Profiling review questions
@@ -889,7 +922,7 @@ The questions most important for each target column, with the answer from the cu
 
 ## 7. QA test scenarios
 
-QA test scenarios for each column of the target table `policy_claims_summary`. They check that the model logic is correct (see the business rules BR1–BR15 in section 1), not the quality of incoming data (sections 3 and 4). Columns are listed in the priority order from section 5. A scenario is included only when it applies to the column.
+QA test scenarios for each column of the target table `policy_claims_summary`. They check that the model logic is correct (see the business rules BR1–BR15 in section 1), not the quality of incoming data (sections 3 and 4). They also use the test types in section 8 (reconciliation by group, edge cases, personal data) and the hierarchical clustering results in section 9. Columns are listed in the priority order from section 5. A scenario is included only when it applies to the column.
 
 **Test data column:**
 - **Existing:** the case is already in the source CSVs. The record named is the one to check.
@@ -916,6 +949,8 @@ QA test scenarios for each column of the target table `policy_claims_summary`. T
 | TC-07 | Rows are sorted by `total_claimed`, highest first | **Low** | Presentation: readers expect the largest exposure first. A wrong order does not change any value.<br><br>**If it fails:** The owners with the largest exposure are not at the top, so reviewers looking at the first rows may miss them. No values are wrong. | BR10 | Existing: all rows | Compare each row with the next | Every row ≥ the row after it; first row `OWN1005` DP-3 Dwelling (98,955.95) |
 | TC-08 | Amounts from every non-denied status are included | **High** | Under Review, Approved, Paid and Closed are all live claims (claim status definitions, 3.1.1). Leaving any of them out understates exposure.<br><br>**If it fails:** Open or settled claims vanish from the total, so exposure is understated. The company may under-price risk or under-reserve for claims it still has to pay. | BR1; claim status definitions (3.1.1) | Existing: `OWN1020` DP-3 (`POL5020`: Paid + Approved), `OWN1007` HO-4 (`POL5007`: Under Review + Closed) | Run model; add up both claims of each policy in the source | `OWN1020` DP-3 = 60,481.85 and `OWN1007` HO-4 = 47,231.28, each equal to the sum of its two claims |
 | TC-09 | A questionable source claim is passed through unchanged | **Medium** | The model does not check cover flags, so the uncovered Paid Flood claim `CLM90015` (finding in 3.1.1) is included. It is 52,117.60 of the top-ranked row's 98,955.95, so the highest exposure in the table depends on a record that may be wrong.<br><br>**If it fails:** The top-ranked owner may be ranked first because of a claim that should never have been paid. Decisions about that owner, and any recovery of the payment, rest on a doubtful record. | Source finding (3.1.1 flood cover) | Existing: `OWN1005` DP-3 (`POL5021`, `CLM90015`) | Run model; compare with the source claim | `total_claimed` = 98,955.95 including `CLM90015`. Re-run after the claims team confirms the claim; if it is corrected, this row changes and may lose its first place (TC-07) |
+| TC-10 | Rows with the same `total_claimed` keep a stable order | **Low** | The model sorts only by `total_claimed` (BR10), so the order of rows with equal totals is not guaranteed and can change between runs (8.12).<br><br>**If it fails:** The same data gives a different row order on each run, so regression comparisons by position and "top N" reports change for no reason. No values are wrong. | BR10 | New: two owner + type groups with identical `total_claimed` | Run model twice; compare row order | Same order both times. Needs a tie-breaker (`owner_id`, `policy_type`) in `ORDER BY`; without it the order is not guaranteed |
+| TC-11 | Very large claim amounts are totalled correctly | **Low** | Boundary check (8.10): totals must stay exact and rounded at the top of the range, with no overflow or loss of precision.<br><br>**If it fails:** Large losses, the ones that matter most, are misstated or shown with rounding noise. Catastrophe-sized claims would be reported wrongly. | BR2, BR9 | New: one Paid claim with `claim_amount` = 10,000,000.00 | Run model | `total_claimed` includes exactly 10,000,000.00 and is rounded to 2 decimals |
 
 ### 7.2 `owner_id` (Critical)
 
@@ -932,6 +967,7 @@ QA test scenarios for each column of the target table `policy_claims_summary`. T
 | OID-09 | Owner with no policies is left out | **Low** | Owners without policies cannot have claims. This mainly confirms the join does not create empty rows.<br><br>**If it fails:** Empty rows for owners with no policies clutter the table and break the at-least-one-claim rule. Counts of owners in reports are inflated. | Join (INNER) | New: owner in `policy_owner` with no rows in `policy_coverage` | Run model | Owner not in output |
 | OID-10 | Policy whose `owner_id` is not in `policy_owner` is left out | **Medium** | Confirms the model does not invent rows for unknown customers. It also shows that such claims are silently dropped, which should be reported as a source data problem.<br><br>**If it fails:** Rows appear for owners who do not exist, or claims are lost without anyone being told. Either way, the source data problem is never fixed. | Join (INNER) | New: policy with `owner_id` = `OWN9999` (not in owners) and a Paid claim | Run model | No row for `OWN9999`; no error |
 | OID-11 | Number of rows matches the number the source predicts | **High** | The row count is the first sign that the filters and the grain work together (review question 6.7). Too many rows means a filter failed; too few means valid owners were lost.<br><br>**If it fails:** Too many rows means filtered-out business is included; too few means valid owners are missing. Every total and count in the table is then off. | BR11; BR1, BR3, BR4, BR5 | Existing: all source data | From the source, count distinct `owner_id` + `policy_type` with a non-denied claim on a non-cancelled policy and `credit_score` ≥ 600 | 11 predicted = 11 in output |
+| OID-12 | One row from each clustering group matches the source on every column | **Medium** | Spot checks should cover every row profile found by hierarchical clustering (9.3, 9.4), not only the top rows. `OWN1016` HO-4 is the row least like the others, so it is checked first.<br><br>**If it fails:** An error that only affects one type of row (recent, high-loss or settled) goes unnoticed because only the largest rows were checked. The unusual row may hide a source or logic problem. | All rules; clustering (9.3) | Existing: `OWN1014` HO-6 (group A), `OWN1005` DP-3 (group B), `OWN1016` HO-4 (group C, least like the others) | Recalculate every column of the three rows by hand from the source files | All columns match. `OWN1016` HO-4: 1 policy (`POL5023`, Renewed), premium 770.69, 1 claim (`CLM90004`, Paid), claimed 3,772.93, approved 2,648.38, rate 70.2, latest incident 2024-05-20. Its HO-5 policy `POL5016` is Expired with no claims, so it has no row (BR5) |
 
 ### 7.3 `policy_type` (Critical)
 
@@ -943,6 +979,7 @@ QA test scenarios for each column of the target table `policy_claims_summary`. T
 | PT-04 | A type whose policies are all filtered out produces no row | **High** | Only types with live, non-denied claims should appear. A row for a cancelled or claim-free type shows claims experience that does not exist.<br><br>**If it fails:** A row shows claims experience for policies that are cancelled or have no live claims. Reviewers act on activity that did not happen. | BR3, BR5 | Existing: `OWN1009` DP-3 (Cancelled), `OWN1006` DP-3 (Cancelled), `OWN1020` HO-4 (Renewed, no claims) | Run model | No DP-3 row for `OWN1009` or `OWN1006`; no HO-4 row for `OWN1020`; their other types still appear |
 | PT-05 | `policy_type` is never null | **Medium** | A row with no policy type has no meaning in a table grouped by type.<br><br>**If it fails:** Rows with no policy type fall out of every by-type report, so their claims and premium go missing from those reports. Nobody can tell which product the row belongs to. | BR11 | Existing: all rows | Check nulls | No nulls |
 | PT-06 | Same type written with different case or spaces becomes a separate row | **Medium** | The model groups on the exact text. `HO-3 Standard` and `ho-3 standard ` would split one owner's HO-3 policies into two rows and break the grain. Domain validation (3.1.1) must reject the bad value before the model runs.<br><br>**If it fails:** One owner's HO-3 policies are split across two rows, so each row understates their exposure. Type-level reports show a stray category. | BR11; domain rule (3.1.1: case and spaces) | New: one owner, two HO-3 policies with claims, one written `HO-3 Standard` and one `ho-3 standard ` | Run the 3.1.1 domain check, then the model | Domain check flags `ho-3 standard `. If the model runs anyway it produces two rows for that owner: raise this as a defect |
+| PT-07 | Subtotals by policy type match the source | **High** | Reports usually group the table by type. A row moved into the wrong type still balances in total but makes both types wrong (reconciliation by group, 8.8).<br><br>**If it fails:** Loss analysis and pricing by product use wrong figures, even though the overall total looks right. One product looks riskier and another safer than they are. | BR11; BR1–BR5 | Existing: all 5 types | Sum `total_claimed` by `policy_type` in the target; sum kept `claim_amount` by `policy_type` in the source | Equal for every type: DP-3 199,835.12; HO-3 49,199.50; HO-4 133,386.46; HO-5 76,589.46; HO-6 12,310.57 |
 
 ### 7.4 `total_approved` (Critical)
 
@@ -973,6 +1010,7 @@ QA test scenarios for each column of the target table `policy_claims_summary`. T
 | CC-10 | `Denied` written with different case or spaces is counted | **High** | The model leaves out claims only when the status is exactly `Denied`. `denied` or `Denied ` slips through, so a rejected claim counts as activity and can create a row that should not exist. Domain validation (3.1.1) must reject the value first.<br><br>**If it fails:** A rejected claim is counted as activity and may even create a row that should not exist. Owners are penalised for claims the company already denied. | BR1; domain rule (3.1.1: case and spaces) | New: owner whose only claim has `claim_status` = `denied` (lower case) | Run the 3.1.1 domain check, then the model | Domain check flags `denied`. If the model runs anyway the owner appears with `claim_count` = 1: raise this as a defect and make the filter ignore case and spaces |
 | CC-11 | Claim with no status is silently left out | **Medium** | An empty status fails `<> 'Denied'` (a null comparison is never true), so the claim disappears without any warning, even if it is a real open claim.<br><br>**If it fails:** Real open claims with a missing status disappear without warning, so exposure is understated. Nobody is alerted to fix the source record. | BR1 | New: policy with a Paid claim and a claim with empty `claim_status` | Run model | `claim_count` = 1; the empty-status claim is not counted. Confirm with the business whether such claims should count, and report them as a source data problem |
 | CC-12 | Claim whose policy is not in `policy_coverage` is left out | **Medium** | A claim for an unknown policy cannot be linked to an owner, so it is dropped without warning. The model behaves correctly, but the lost claim should be reported as a source data problem.<br><br>**If it fails:** Claims with an unknown policy are lost from all totals without warning. The broken link in the source is never reported or fixed. | Join (LEFT, claims to policies) | New: claim with `policy_id` = `POL9999` (not in coverage) | Run model | No row created for the claim; model runs without error; totals of other rows unchanged |
+| CC-13 | Claims file with a header but no rows | **Medium** | Edge case (8.10): a load with no claims must give an empty table, not an error. `read_csv_auto` cannot infer types from an empty file and reads every column as text.<br><br>**If it fails:** The model crashes on a quiet day with no claims, so no table is produced and downstream reports fail or show stale data. | BR2, BR5; source types (8.4) | New: `policy_claims.csv` with the header row only; other files unchanged | Run model | Model runs without error and returns 0 rows. **Fails now:** `Binder Error: No function matches ... 'sum(VARCHAR)'`. Fix: read the sources with explicit column types |
 
 ### 7.6 `total_annual_premium` (High)
 
@@ -986,6 +1024,7 @@ QA test scenarios for each column of the target table `policy_claims_summary`. T
 | TAP-06 | Result is rounded to 2 decimals | **Low** | Format check: amounts read as clean 2-decimal values.<br><br>**If it fails:** Premium amounts show floating-point noise in reports. Exact-match reconciliations fail even though the money is right. | BR9 | New: two same-type policies with premiums 1,000.10 and 1,000.20 | Run model | 2,000.30 exactly |
 | TAP-07 | Total matches the source for every row | **High** | Main check that the premium figure is true for every row.<br><br>**If it fails:** The revenue side of every claims-to-premium comparison is wrong. Pricing and renewal decisions are based on false profitability. | BR2, BR3 | Existing: all 11 rows | Sum `annual_premium` of non-cancelled policies per group, each policy once | Equal for every row |
 | TAP-08 | Value is always above 0 | **Medium** | Every row has at least one policy, and every source premium is above 0 (3.1.2), so a total of 0 or less means premium was lost (expected range, 3.2.2).<br><br>**If it fails:** A zero or negative premium shows coverage that earns nothing, which is impossible. Loss ratios for that row become infinite or meaningless. | Range (3.2.2) | Existing: all rows | Check min | Min > 0 (current min 199.25) |
+| TAP-09 | Premium per policy is within the source premium range | **High** | Cross-column check: `total_annual_premium` ÷ `policy_count` must be a believable single-policy premium. A value above the largest source premium is the clearest sign of premium counted once per claim (BR2).<br><br>**If it fails:** Premium is inflated, so claims look cheaper relative to premium and risky owners look profitable. The check can run on every load without the source files. | BR2, BR6 | Existing: all rows | Calculate `total_annual_premium / policy_count` per row; compare with min and max of `policy_coverage.annual_premium` | Every value between 199.25 and 3,808.81 (current min and max match the source exactly) |
 
 ### 7.7 `approval_rate_pct` (High)
 
@@ -998,6 +1037,8 @@ QA test scenarios for each column of the target table `policy_claims_summary`. T
 | AR-05 | Rounded to 1 decimal | **Low** | Format check: rates read with 1 decimal.<br><br>**If it fails:** Rates show long decimals in reports, which looks unprofessional. Exact comparisons and thresholds may behave unexpectedly. | BR9 | New: claimed 3,000, approved 1,000 (33.333…%) | Run model | 33.3 |
 | AR-06 | Denied claims do not affect the rate | **High** | The rate must use the same claims as `total_claimed`. If rejected claims slip into the calculation, the rate disagrees with the totals shown.<br><br>**If it fails:** The rate is calculated on a different set of claims from the totals shown, so it is wrongly low. Owners and adjusters may be wrongly questioned about approvals. | BR1 | Existing: `OWN1014` HO-6 | Run model | Rate uses only the Under Review claim: 0 / 12,310.57 = 0.0, not 0 / 38,775.16 |
 | AR-07 | Rate is always between 0 and 100 | **Medium** | A percentage outside 0–100 makes no sense (expected range, 3.2.2). A value above 100 would mean more was approved than claimed, usually a sign of double-counting.<br><br>**If it fails:** A rate below 0 or above 100 is impossible and usually hides double-counting. Any monitoring based on the rate becomes unreliable. | Range (3.2.2) | Existing: all rows | Check min and max | Min 0.0, max 88.5; all within 0–100 |
+| AR-08 | Zero approved and zero rate always occur together | **Medium** | Cross-column check (4.2 findings): `total_approved` = 0 must mean `approval_rate_pct` = 0, and the reverse. A mismatch means the rate is calculated from different claims from the total.<br><br>**If it fails:** The row contradicts itself, for example 0% approved next to a non-zero approved amount. Readers cannot trust either figure. | BR8, BR15 | Existing: all rows | Find rows where exactly one of `total_approved` = 0 and `approval_rate_pct` = 0 is true | 0 rows. The same two rows (`OWN1001` DP-3, `OWN1014` HO-6) have both zeros |
+| AR-09 | A 0% rate is explained by the claim stage | **Medium** | Hierarchical clustering found that approval rate moves with incident age (9.2): recent claims are still Under Review with nothing approved. A 0% rate should only come from claims that are still open.<br><br>**If it fails:** A 0% rate on settled claims would point to a missing approved amount or a status error, not a normal delay. Owners could be wrongly reported as having claims refused. | BR1, BR8; claim stage (9.2) | Existing: `OWN1001` DP-3, `OWN1014` HO-6 | For each row with `approval_rate_pct` = 0, list the non-denied source claims and their status; compare `latest_incident_date` with the other rows | Both rows have one Under Review claim each and the two most recent incident dates in the table (2026-04-10, 2025-12-12). Business to confirm low rates on recent claims are expected |
 
 ### 7.8 `latest_incident_date` (Medium)
 
@@ -1033,6 +1074,7 @@ QA test scenarios for each column of the target table `policy_claims_summary`. T
 | OS-03 | Values are in the source domain | **Low** | A state outside the source list suggests the value was changed or corrupted along the way.<br><br>**If it fails:** An invalid state appears in reports, and its figures are taken away from the real state. It suggests the data was corrupted along the way. | Domain (3.2.1) | Existing: all rows | Check against `policy_owner.state` values | All valid. `OR` is missing because of the filters (3.2.1) |
 | OS-04 | Never null | **Low** | A row without a state drops out of any state-level analysis.<br><br>**If it fails:** Rows without a state drop out of state-level reports, so those totals are understated. The missing owners are hard to notice. | BR13 | Existing: all rows | Check nulls | No nulls |
 | OS-05 | A state with no qualifying owners does not appear | **Low** | A state can be valid in the source but missing from the target because of the filters (3.2.1). The test confirms the gap is explained, not caused by lost rows.<br><br>**If it fails:** A missing state may hide lost rows rather than an expected filter effect. State-level reports could silently leave out real business. | BR1, BR3; target domain (3.2.1) | Existing: `OR` owners `OWN1012` and `OWN1015` (Cancelled), `OWN1013` (only a Denied claim) | Run model | `OR` not in output; each of the 3 Oregon owners is excluded by BR3 or BR1 |
+| OS-06 | Subtotals by owner state match the source | **Medium** | State-level reports group the table by `owner_state`. A row in the wrong state still balances in total but makes two states wrong (reconciliation by group, 8.8).<br><br>**If it fails:** Regional results are misstated even though the overall total is right. State-level decisions or regulatory reports use wrong figures. | BR13; BR1–BR5 | Existing: all 6 states | Sum `total_claimed` by `owner_state` in the target; sum kept `claim_amount` by owner `state` in the source | Equal for every state: CO 56,480.82; FL 60,481.85; NC 156,155.50; OH 82,382.25; TN 59,800.58; TX 56,020.11 |
 
 ### 7.11 `owner_name` (Low)
 
@@ -1041,51 +1083,57 @@ QA test scenarios for each column of the target table `policy_claims_summary`. T
 | ON-01 | Name is first name, one space, last name | **Low** | The name must match the customer record so people can recognise the owner. It does not affect any number.<br><br>**If it fails:** Names do not match the customer record, so people cannot recognise or look up the owner. No figures are affected. | BR12 | Existing: all rows | Compare with `first_name \|\| ' ' \|\| last_name` from the source | Exact match on every row |
 | ON-02 | Missing first or last name | **Low** | A blank name makes the row hard to recognise. The business needs to decide whether the first name alone is acceptable.<br><br>**If it fails:** Rows with a blank name are hard to identify in reviews and may be ignored. The business decision on how to show partial names stays open. | BR12 | New: owner with `last_name` empty, Renewed policy, Paid claim | Run model | `owner_name` is null (in DuckDB, joining text with a null gives null). Confirm with the business whether the first name alone should be shown instead |
 | ON-03 | No extra spaces | **Low** | Format check: extra spaces look wrong and break exact matching on names.<br><br>**If it fails:** Names with extra spaces look wrong and fail exact matches against other systems. Lookups by name may miss the owner. | BR12 | Existing: all rows | Check for leading, trailing or double spaces | None found |
+| ON-04 | `owner_name` is the only personal field in the output | **Medium** | Security and personal data (8.15): the table needs the name to identify the owner, but no other personal details. `credit_score` filters rows (BR4) but must not be shown.<br><br>**If it fails:** Email, phone, address, date of birth or credit score could be shared with everyone who reads the table. That is a privacy breach and may break data protection rules. | BR12; security (8.15) | Existing: model output | List the output columns (`DESCRIBE`) | 11 columns as in 8.4; no `email`, `phone`, `address`, `date_of_birth` or `credit_score` |
 
 ### 7.12 Summary
 
 | Column | Priority | Scenarios | Existing data | New data needed | High importance | Medium importance | Low importance |
 |---|---|---|---|---|---|---|---|
-| `total_claimed` | Critical | 9 | 6 | 3 | 4 | 3 | 2 |
-| `owner_id` | Critical | 11 | 7 | 4 | 6 | 4 | 1 |
-| `policy_type` | Critical | 6 | 4 | 2 | 2 | 4 | 0 |
+| `total_claimed` | Critical | 11 | 6 | 5 | 4 | 3 | 4 |
+| `owner_id` | Critical | 12 | 8 | 4 | 6 | 5 | 1 |
+| `policy_type` | Critical | 7 | 5 | 2 | 3 | 4 | 0 |
 | `total_approved` | Critical | 8 | 6 | 2 | 5 | 2 | 1 |
-| `claim_count` | Critical | 12 | 7 | 5 | 7 | 5 | 0 |
-| `total_annual_premium` | High | 8 | 3 | 5 | 4 | 3 | 1 |
-| `approval_rate_pct` | High | 7 | 4 | 3 | 2 | 4 | 1 |
+| `claim_count` | Critical | 13 | 7 | 6 | 7 | 6 | 0 |
+| `total_annual_premium` | High | 9 | 4 | 5 | 5 | 3 | 1 |
+| `approval_rate_pct` | High | 9 | 6 | 3 | 2 | 6 | 1 |
 | `latest_incident_date` | Medium | 6 | 4 | 2 | 0 | 5 | 1 |
 | `policy_count` | Medium | 9 | 3 | 6 | 3 | 5 | 1 |
-| `owner_state` | Medium | 5 | 4 | 1 | 0 | 2 | 3 |
-| `owner_name` | Low | 3 | 2 | 1 | 0 | 0 | 3 |
-| **Total** | | **84** | **50** | **34** | **33** | **37** | **14** |
+| `owner_state` | Medium | 6 | 5 | 1 | 0 | 3 | 3 |
+| `owner_name` | Low | 4 | 3 | 1 | 0 | 1 | 3 |
+| **Total** | | **94** | **57** | **37** | **35** | **43** | **16** |
 
 **Business rule coverage:** every rule in section 1 is tested by at least one scenario. The table lists each rule and the scenarios whose **Rule** column names it.
 
 | Rule | Description | Target column | Scenarios | Count |
 |---|---|---|---|---|
-| BR1 | Denied claims are excluded | `claim_count` | TC-01, TC-02, TC-08, OID-11, TA-01, TA-02, TA-03, TA-07, CC-01, CC-02, CC-03, CC-04, CC-10, CC-11, TAP-04, AR-06, LID-01, LID-02, OS-05 | 19 |
-| BR2 | Claims are totalled per policy **before** joining | `total_annual_premium` | TC-01, TC-03, TA-01, TA-04, CC-01, CC-06, TAP-01, TAP-02, TAP-07, LID-01, LID-03, LID-06, PC-02 | 13 |
-| BR3 | Cancelled policies are excluded | `policy_count` | TC-04, OID-05, OID-11, PT-04, CC-07, TAP-05, TAP-07, PC-01, PC-05, PC-06, PC-08, PC-09, OS-05 | 13 |
-| BR4 | Owners with a credit score below 600 are excluded | `owner_id` | OID-06, OID-07, OID-08, OID-11 | 4 |
-| BR5 | Only rows with at least one claim are kept | `claim_count` | TC-06, OID-11, PT-04, CC-04, CC-05, CC-08, LID-04 | 7 |
-| BR6 | Policies with no claims still contribute premium | `total_annual_premium` | TAP-03, TAP-04, PC-04 | 3 |
+| BR1 | Denied claims are excluded | `claim_count` | TC-01, TC-02, TC-08, OID-11, PT-07, TA-01, TA-02, TA-03, TA-07, CC-01, CC-02, CC-03, CC-04, CC-10, CC-11, TAP-04, AR-06, AR-09, LID-01, LID-02, OS-05, OS-06 | 22 |
+| BR2 | Claims are totalled per policy **before** joining | `total_annual_premium` | TC-01, TC-03, TC-11, PT-07, TA-01, TA-04, CC-01, CC-06, CC-13, TAP-01, TAP-02, TAP-07, TAP-09, LID-01, LID-03, LID-06, PC-02, OS-06 | 18 |
+| BR3 | Cancelled policies are excluded | `policy_count` | TC-04, OID-05, OID-11, PT-04, PT-07, CC-07, TAP-05, TAP-07, PC-01, PC-05, PC-06, PC-08, PC-09, OS-05, OS-06 | 15 |
+| BR4 | Owners with a credit score below 600 are excluded | `owner_id` | OID-06, OID-07, OID-08, OID-11, PT-07, OS-06 | 6 |
+| BR5 | Only rows with at least one claim are kept | `claim_count` | TC-06, OID-11, PT-04, PT-07, CC-04, CC-05, CC-08, CC-13, LID-04, OS-06 | 10 |
+| BR6 | Policies with no claims still contribute premium | `total_annual_premium` | TAP-03, TAP-04, TAP-09, PC-04 | 4 |
 | BR7 | Missing claim values count as 0 | `total_claimed` | TA-03 | 1 |
-| BR8 | Approval rate avoids dividing by zero | `approval_rate_pct` | AR-01, AR-02, AR-03, AR-04 | 4 |
-| BR9 | Money and percentage columns are rounded | `total_claimed` | TC-05, TA-06, TAP-06, AR-01, AR-05 | 5 |
-| BR10 | Sort order | `total_claimed` | TC-07 | 1 |
-| BR11 | Policy type is copied unchanged and, with `owner_id`, defines the grain | `policy_type` | TC-03, OID-01, OID-04, OID-11, PT-01, PT-03, PT-05, PT-06, TA-04, CC-06, LID-03, PC-03 | 12 |
-| BR12 | Owner name is first name, one space, last name | `owner_name` | ON-01, ON-02, ON-03 | 3 |
-| BR13 | Owner state is the owner's mailing state | `owner_state` | OS-01, OS-02, OS-04 | 3 |
+| BR8 | Approval rate avoids dividing by zero | `approval_rate_pct` | AR-01, AR-02, AR-03, AR-04, AR-08, AR-09 | 6 |
+| BR9 | Money and percentage columns are rounded | `total_claimed` | TC-05, TC-11, TA-06, TAP-06, AR-01, AR-05 | 6 |
+| BR10 | Sort order | `total_claimed` | TC-07, TC-10 | 2 |
+| BR11 | Policy type is copied unchanged and, with `owner_id`, defines the grain | `policy_type` | TC-03, OID-01, OID-04, OID-11, PT-01, PT-03, PT-05, PT-06, PT-07, TA-04, CC-06, LID-03, PC-03 | 13 |
+| BR12 | Owner name is first name, one space, last name | `owner_name` | ON-01, ON-02, ON-03, ON-04 | 4 |
+| BR13 | Owner state is the owner's mailing state | `owner_state` | OS-01, OS-02, OS-04, OS-06 | 4 |
 | BR14 | Latest incident is the most recent non-denied claim | `latest_incident_date` | LID-01, LID-02, LID-03, LID-04 | 4 |
-| BR15 | Approved amount is totalled from non-denied claims | `total_approved` | TA-01, TA-02, TA-03, TA-04, TA-07 | 5 |
+| BR15 | Approved amount is totalled from non-denied claims | `total_approved` | TA-01, TA-02, TA-03, TA-04, TA-07, AR-08 | 6 |
 
-Several new-data scenarios use the same setup: **one owner with two policies of the same type**. TC-03, TC-04, TA-04, CC-06, CC-07, TAP-03 to TAP-06, LID-03 and PC-03 to PC-05 can share one small test file with a few owners built this way. A second small file with **bad source values** (wrong case, extra spaces, empty statuses, unknown IDs) covers PT-06, CC-10 to CC-12, OID-10 and PC-08 to PC-09.
+Several new-data scenarios use the same setup: **one owner with two policies of the same type**. TC-03, TC-04, TA-04, CC-06, CC-07, TAP-03 to TAP-06, LID-03 and PC-03 to PC-05 can share one small test file with a few owners built this way. A second small file with **bad source values** (wrong case, extra spaces, empty statuses, unknown IDs) covers PT-06, CC-10 to CC-12, OID-10 and PC-08 to PC-09. Three more small cases need their own copies of the source files: **ties and large values** (TC-10, TC-11) and **an empty claims file** (CC-13).
+
+**Cross-column and group checks** (TAP-09, AR-08, PT-07, OS-06) need no new data and no source files except for the group subtotals, so they can run on every load. OID-12 and AR-09 come from the hierarchical clustering in section 9; re-check them whenever the clustering groups change.
 
 **Defects and open issues found by these scenarios:**
 
 | Scenario | Issue | Action |
 |---|---|---|
 | CC-09 | `claim_count` is output as a 128-bit integer (`HUGEINT`), which many tools cannot read | **Fails now.** Cast to `BIGINT` in the model |
+| CC-13 | A source file with a header but no rows crashes the model, because `read_csv_auto` reads every column of an empty file as text. Confirmed for all three source files (8.10) | **Fails now.** Read the sources with explicit column types (`read_csv(..., types = {...})`), which also fixes the `zip_code` type finding (8.4) |
+| TC-10 | `ORDER BY total_claimed` has no tie-breaker, so rows with equal totals can change order between runs | Add `owner_id, policy_type` to the `ORDER BY` (8.12) |
+| AR-09 | A 0% approval rate on rows with recent Under Review claims looks like refusal but is most likely a normal processing delay (9.2) | Claims team to confirm; if confirmed, report claim stage next to the rate |
 | CC-10, PC-08, PT-06 | Status and type filters match text exactly, so a value with different case or extra spaces is handled wrongly | Run domain validation (3.1.1) before the model; consider making the filters ignore case and spaces |
 | CC-11, PC-09, OID-08 | Empty statuses and credit scores silently remove claims, policies or owners | Business to decide the intended handling |
 | TC-09, TA-08 | Top-ranked row (`OWN1005` DP-3) depends on the questionable claim `CLM90015` | Claims team to confirm the claim; re-run the scenarios afterwards |
@@ -1309,8 +1357,9 @@ These tests use **new test files** (see 7.12), never `source/`. They check the m
 | Negative: bad statuses | `'cancelled'`, `' Denied '`, empty status | Documented behaviour (CC-10, CC-11, PC-08, PC-09); raised as open issues |
 | Negative: orphans | Claim with unknown `policy_id`; policy with unknown `owner_id` | Excluded and reported by T3 |
 | Negative: negative amounts | `claim_amount` < 0 | Caught by range validation (3.1.2) before the model runs |
-| Empty input | `policy_claims.csv` with header only | Model runs without error and returns 0 rows |
-| Empty input | `policy_owner.csv` with header only | Model runs without error and returns 0 rows |
+| Empty input | `policy_claims.csv` with header only | Model runs without error and returns 0 rows. **Fails now:** `sum(VARCHAR)` binder error (CC-13) |
+| Empty input | `policy_coverage.csv` with header only | Model runs without error and returns 0 rows. **Fails now:** `sum(VARCHAR)` binder error |
+| Empty input | `policy_owner.csv` with header only | Model runs without error and returns 0 rows. **Fails now:** cannot compare text `credit_score` with 600 |
 | Large values | `claim_amount` = 10,000,000 | Totals correct, no overflow, rounding still 2 decimals |
 | Grain (BR11) | One owner with two HO-3 policies, both with claims | One row; `policy_count` = 2; totals cover both policies |
 | Missing name (BR12) | Owner with `last_name` empty | `owner_name` is NULL; row is still kept |
@@ -1368,7 +1417,7 @@ SELECT 'only in current', * FROM (
 | Check | How | Pass criteria | Current result |
 |---|---|---|---|
 | Same input gives the same output | Run the model twice and compare with `EXCEPT ALL` both ways | 0 differences | Pass |
-| Row order is stable | Look for ties in the sort column: `SELECT total_claimed, COUNT(*) FROM target GROUP BY 1 HAVING COUNT(*) > 1` | No ties, or a tie-breaker in `ORDER BY` | Pass (no ties today). Recommend adding `owner_id, policy_type` to the `ORDER BY` so ties cannot change the order |
+| Row order is stable | Look for ties in the sort column: `SELECT total_claimed, COUNT(*) FROM target GROUP BY 1 HAVING COUNT(*) > 1` | No ties, or a tie-breaker in `ORDER BY` | Pass (no ties today; TC-10 tests the tie case). Recommend adding `owner_id, policy_type` to the `ORDER BY` so ties cannot change the order |
 | No dependence on run date or environment | Search the model for `current_date`, `now()` and random functions | None used | Pass |
 | Re-running does not append | When writing to a database (`--db`), run twice and count rows | Same row count both times | To test when a persistent table is used |
 
@@ -1437,6 +1486,111 @@ The current data is tiny (80 source rows), so performance must be tested on a sc
 - The baseline (8.11) is saved for the next change.
 - UAT sign-off is recorded.
 
-**Current status:** not ready for release. Two items are open:
+**Current status:** not ready for release. Three items are open:
 - **T2 / T9:** `claim_count` is HUGEINT (CC-09). The fix is to cast it to BIGINT in the model.
+- **T10:** an empty source file crashes the model (CC-13). The fix is to read the sources with explicit column types.
 - **T16:** the business has not yet decided the open issues in 7.12.
+
+---
+
+## 9. Statistical analysis: hierarchical clustering
+
+Hierarchical clustering groups items by how similar they are and shows the result as a tree (dendrogram). Items that join low in the tree are closely related; items that join high are nearly independent. It is used here for two things:
+- **Columns:** which target columns move together, so that related columns are tested together and independent columns get their own tests.
+- **Rows:** which owner + policy type rows have a similar profile, so that spot checks cover every profile and unusual rows stand out.
+
+Clustering suits this table because it works on very small data and does not need the number of groups chosen in advance. The groups are **descriptive, not proof**: with 11 rows, treat them as a guide for where to test and what to ask, not as a business finding.
+
+**How to run:**
+
+```
+.venv/bin/python analysis/cluster_target.py               # 3 row groups (default)
+.venv/bin/python analysis/cluster_target.py --clusters 4
+```
+
+The script runs the model, prints the results below, and saves the two images in `test_plan/images/`. Re-run it after every model change or data load, and update this section if the groups change.
+
+### 9.1 Method
+
+| Item | Columns | Rows |
+|---|---|---|
+| Input | 6 numeric target columns | 11 target rows, described by the same 6 columns |
+| Preparation | `latest_incident_date` converted to `days_before_latest` (days before the most recent incident in the table) | Same, plus money columns log-transformed (they are skewed) and every column standardised (mean 0, standard deviation 1) |
+| Distance | 1 − \|Spearman correlation\| (columns that rise and fall together are close, whether the link is positive or negative) | Euclidean distance on the standardised values |
+| Linkage | Average (groups join on their average distance) | Ward (joins the groups that stay most compact) |
+| Left out | `policy_count`: always 1, so it has no variation to cluster (see BR11 in 2.5). Identifiers and names (`owner_id`, `owner_name`) and categories (`owner_state`, `policy_type`) are left out; categories would need Gower distance, which handles mixed types | Same |
+| Fit check | Cophenetic correlation 0.65 (moderate: treat the column groups as a guide) | Cophenetic correlation 0.87 (good) |
+
+The **cophenetic correlation** measures how well the tree keeps the original distances, from 0 (not at all) to 1 (perfectly).
+
+### 9.2 Column clustering
+
+![Column clustering dendrogram](images/target_column_dendrogram.png)
+
+**Spearman correlation (current data):**
+
+| | `total_annual_premium` | `claim_count` | `total_claimed` | `total_approved` | `approval_rate_pct` | `days_before_latest` |
+|---|---|---|---|---|---|---|
+| `total_annual_premium` | 1.00 | -0.40 | -0.17 | -0.33 | -0.31 | 0.05 |
+| `claim_count` | -0.40 | 1.00 | 0.46 | 0.52 | 0.23 | 0.17 |
+| `total_claimed` | -0.17 | 0.46 | 1.00 | **0.65** | -0.02 | -0.03 |
+| `total_approved` | -0.33 | 0.52 | **0.65** | 1.00 | **0.62** | 0.53 |
+| `approval_rate_pct` | -0.31 | 0.23 | -0.02 | **0.62** | 1.00 | **0.60** |
+| `days_before_latest` | 0.05 | 0.17 | -0.03 | 0.53 | **0.60** | 1.00 |
+
+With 11 rows, only a correlation of about ±0.6 or stronger is statistically meaningful at the 5% level (shown in bold).
+
+**Merge order:**
+
+| Step | Joined | Distance | \|ρ\| |
+|---|---|---|---|
+| 1 | `total_claimed` + `total_approved` | 0.35 | 0.65 |
+| 2 | `approval_rate_pct` + `days_before_latest` | 0.40 | 0.60 |
+| 3 | `claim_count` + (claimed, approved) | 0.51 | 0.49 |
+| 4 | `total_annual_premium` + (claim count, claimed, approved) | 0.70 | 0.30 |
+| 5 | (rate, days) + everything else | 0.76 | 0.24 |
+
+**Column groups and what they mean for testing:**
+
+| Group | Columns | Why they are related | Testing approach |
+|---|---|---|---|
+| **Claim size** | `total_claimed`, `total_approved`, then `claim_count` | All three are totalled from the same non-denied claim records (BR1, BR2, BR15) | Test together: one reconciliation (T6) and one whole-row test file per rule. A failure in one usually means a failure in the others |
+| **Claim stage** | `approval_rate_pct`, `latest_incident_date` | No formula links them. Older incidents have higher approval rates, most likely because recent claims are still Under Review with nothing approved, while older claims are settled | **Business question:** confirm with the claims team. If true, a low approval rate on a row with a recent incident is expected, not a defect, and `approval_rate_pct` checks should take claim age into account |
+| **Premium** | `total_annual_premium` | Joins last and has only weak, negative links to the claims columns | Most independent column: the claims tests will not catch its errors. Keep its own reconciliation and double-counting tests (TAP-01, TAP-02, BR2, BR6) |
+
+`approval_rate_pct` is calculated from `total_approved` and `total_claimed` (BR8), so part of its link to `total_approved` is built in by the formula, not found in the data.
+
+### 9.3 Row clustering
+
+![Row clustering dendrogram](images/target_row_dendrogram.png)
+
+Cut into 3 groups (dashed line):
+
+| Group | Rows | Avg premium | Avg claims | Avg claimed | Avg approved | Avg approval rate | Avg days before latest incident | Profile |
+|---|---|---|---|---|---|---|---|---|
+| **A** | `OWN1001` DP-3, `OWN1014` HO-6 | 2,285.70 | 1.0 | 26,353.90 | 0.00 | 0.0% | 60 | **Recent, under review:** one recent claim each, nothing approved yet |
+| **B** | `OWN1003` HO-3, `OWN1005` DP-3, `OWN1007` HO-4, `OWN1009` HO-4, `OWN1020` DP-3 | 917.60 | 2.0 | 65,656.50 | 34,615.80 | 59.2% | 766 | **High loss:** two claims each, large claimed amounts against low premium |
+| **C** | `OWN1005` HO-3, `OWN1006` HO-5, `OWN1016` HO-4, `OWN1017` HO-5 | 2,672.10 | 1.2 | 22,582.70 | 16,042.10 | 70.5% | 1,030 | **Settled, well covered:** higher premium, smaller and older claims, mostly approved |
+
+**What the row groups show:**
+- **Group A** is exactly the two rows with zero `total_approved` found in data profiling (4.2). The clustering confirms that finding independently.
+- **Group B** is the riskiest profile. It contains the top-ranked row `OWN1005` DP-3 and its questionable claim `CLM90015` (TC-09, TA-08).
+- **`OWN1016` HO-4** joins group C last. At 4 groups it becomes a group on its own, so it is the row least like the others and worth a manual check against the source.
+- **`OWN1005`** appears in two different groups (DP-3 in B, HO-3 in C). This shows why the grain keeps policy types apart (BR11): the same owner has a very different profile per type.
+
+### 9.4 How the results are used in the test plan
+
+| Use | Action |
+|---|---|
+| **Group the tests** | Test the claim size columns together (section 7 scenarios for `total_claimed`, `total_approved` and `claim_count` share test files). Keep separate tests for premium |
+| **Choose spot-check rows** | For UAT (T16) and row-by-row reconciliation (T6), check at least one row from each group: for example `OWN1014` HO-6 (A), `OWN1005` DP-3 (B) and `OWN1016` HO-4 (C), instead of only the top rows |
+| **Investigate unusual rows** | Any row that forms a group on its own is checked against the source before release |
+| **Monitor change** | Re-run after each load. A new group, rows moving between groups, or a column moving to a different group means the data or the logic changed, even when every single-column check passes. Record the result with the regression baseline (8.11) |
+| **Raise business questions** | Add to the open issues (7.12): is a low approval rate on recent claims expected (claim stage group)? |
+
+### 9.5 Limits
+
+- **Small data:** 11 rows is enough to see structure but not to prove it. Repeat the analysis on the source claims (35 rows) or the 1,000× test data (8.13) before drawing business conclusions.
+- **Choices change the result:** the log transform, scaling, distance and linkage method all affect the groups. Keep them fixed (they are set in the script) so results are comparable between runs.
+- **Formulas create links:** derived columns (`approval_rate_pct`) are related to their inputs by design.
+- **Constant columns cannot be clustered:** `policy_count` returns once the data has an owner with two policies of the same type.
